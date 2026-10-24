@@ -1,0 +1,87 @@
+@import "tailwindcss";
+
+:root {
+  /* White-label theme variables */
+  --primary-color: #2563eb;
+  --primary-light: #eff6ff;
+  --primary-dark: #1d4ed8;
+  --primary-muted: rgba(37, 99, 235, 0.1);
+  --primary-glow: rgba(37, 99, 235, 0.25);
+
+  /* Surfaces & Neutrals */
+  --bg-app: #f8fafc;
+  --bg-card: #ffffff;
+  --bg-subtle: #f1f5f9;
+  --border-subtle: #e2e8f0;
+  --border-light: #f1f5f9;
+
+  /* Typography Colors */
+  --text-main: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+
+  /* Accent status colors */
+  --status-success: #16a34a;
+  --status-success-light: #dcfce7;
+  --status-warning: #ea580c;
+  --status-warning-light: #ffedd5;
+  --status-danger: #dc2626;
+  --status-danger-light: #fee2e2;
+}
+
+@theme inline {
+  --color-primary: var(--primary-color);
+  --color-primary-light: var(--primary-light);
+  --color-primary-dark: var(--primary-dark);
+  --color-primary-muted: var(--primary-muted);
+  --color-app-bg: var(--bg-app);
+  --color-card-bg: var(--bg-card);
+  --color-subtle-bg: var(--bg-subtle);
+  --color-border-subtle: var(--border-subtle);
+}
+
+/* Base mobile container behavior */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #f1f5f9;
+  color: var(--text-main);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Accessible focus outline for keyboard navigation */
+:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 2px;
+}
+
+/* Hide scrollbar for clean mobile tabs & horizontal chips */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Native-feel tap micro-bounce (prevents accidental text selection on controls) */
+.tap-bounce {
+  transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.tap-bounce:active {
+  transform: scale(0.96);
+}
+
+/* Glassmorphism blur for sticky header & bottom bar */
+.glass-surface {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
