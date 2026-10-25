@@ -40,6 +40,6 @@
   ],
   "exclude": [
     "node_modules",
-    "Tution Desk BE"
+    "tution-desk-be"
   ]
 }

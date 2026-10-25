@@ -46,7 +46,7 @@ Construct the staging connection string using the staging database name explicit
 mongodb+srv://tuitiondesk_staging_user:<STAGING_PASSWORD>@<ATLAS_CLUSTER>.mongodb.net/tuitiondesk_staging?retryWrites=true&w=majority
 ```
 > [!IMPORTANT]
-> The backend connection initialization (`Tution Desk BE/src/lib/db.ts`) relies on the database name embedded in `MONGODB_URI`. Specifying `/tuitiondesk_staging` directly in the connection URI guarantees that Mongoose connects strictly to the staging database.
+> The backend connection initialization (`tution-desk-be/src/lib/db.ts`) relies on the database name embedded in `MONGODB_URI`. Specifying `/tuitiondesk_staging` directly in the connection URI guarantees that Mongoose connects strictly to the staging database.
 
 ### Step 2.4: Validate User Scoping (Atlas Validation Step)
 Using `mongosh` with the `tuitiondesk_staging_user` credentials:
@@ -101,7 +101,7 @@ ENABLE_LIVE_WHATSAPP=false
 ```
 
 ### Step 4.2: Guard Mechanics
-The simulation guard in `src/lib/whatsappService.ts` and `Tution Desk BE/src/lib/whatsappService.ts`:
+The simulation guard in `src/lib/whatsappService.ts` and `tution-desk-be/src/lib/whatsappService.ts`:
 1. Requires **both** `WHATSAPP_MODE === "live"` AND `ENABLE_LIVE_WHATSAPP === "true"` to send real messages.
 2. In simulation mode (`WHATSAPP_MODE=simulation` or default):
    - **Zero HTTP network requests** are sent to port 3005.
@@ -122,7 +122,7 @@ Binding to `127.0.0.1` ensures that the WhatsApp Express service is accessible o
 ## 5. Staging Origin & CORS Configuration
 
 ### Step 5.1: Backend CORS Verification
-The CORS handler (`Tution Desk BE/src/lib/cors.ts`) natively reads and parses the `ALLOWED_ORIGINS` environment variable:
+The CORS handler (`tution-desk-be/src/lib/cors.ts`) natively reads and parses the `ALLOWED_ORIGINS` environment variable:
 ```typescript
 const envOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim().replace(/\/$/, ''))
@@ -131,7 +131,7 @@ const envOrigins = process.env.ALLOWED_ORIGINS
 It supports comma-separated URLs and automatically strips trailing slashes.
 
 ### Step 5.2: Staging Origins Configuration
-In `Tution Desk BE/.env.staging`:
+In `tution-desk-be/.env.staging`:
 ```ini
 ALLOWED_ORIGINS=https://staging.tuitiondesk.com,https://staging-admin.tuitiondesk.com
 ```
@@ -149,7 +149,7 @@ NEXT_PUBLIC_APP_URL=https://staging.tuitiondesk.com
 The workspace provides three clean example templates containing placeholders only:
 
 1. **Frontend Template**: `D:\Tution Desk\.env.staging.example`
-2. **Backend Template**: `D:\Tution Desk\Tution Desk BE\.env.staging.example`
+2. **Backend Template**: `D:\Tution Desk\tution-desk-be\.env.staging.example`
 3. **WhatsApp Microservice Template**: `D:\Tution Desk\whatsapp-server\.env.staging.example`
 
 ### Instantiation Procedure (When deploying staging):
@@ -158,7 +158,7 @@ The workspace provides three clean example templates containing placeholders onl
 cp .env.staging.example .env.staging
 
 # Backend
-cp "Tution Desk BE/.env.staging.example" "Tution Desk BE/.env.staging"
+cp "tution-desk-be/.env.staging.example" "tution-desk-be/.env.staging"
 
 # WhatsApp Microservice
 cp "whatsapp-server/.env.staging.example" "whatsapp-server/.env.staging"
@@ -187,10 +187,10 @@ If staging configuration issues arise, rollback is clean, safe, and immediate:
 Delete any generated `.env.staging` files:
 ```powershell
 Remove-Item -Path "D:\Tution Desk\.env.staging" -ErrorAction SilentlyContinue
-Remove-Item -Path "D:\Tution Desk\Tution Desk BE\.env.staging" -ErrorAction SilentlyContinue
+Remove-Item -Path "D:\Tution Desk\tution-desk-be\.env.staging" -ErrorAction SilentlyContinue
 Remove-Item -Path "D:\Tution Desk\whatsapp-server\.env.staging" -ErrorAction SilentlyContinue
 ```
-Active local files (`.env.local`, `Tution Desk BE/.env`, `whatsapp-server/.env`) remain unaffected.
+Active local files (`.env.local`, `tution-desk-be/.env`, `whatsapp-server/.env`) remain unaffected.
 
 ### 8.2: Database Teardown (If required)
 Because staging is isolated to `tuitiondesk_staging`:
