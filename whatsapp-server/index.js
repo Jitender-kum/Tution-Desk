@@ -34,6 +34,14 @@ app.use(cors());
 app.use(express.json());
 
 /**
+ * Health check endpoint for orchestrators (e.g. Render)
+ * Reports HTTP service health only. Does not require internal secret.
+ */
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "ok", service: "tuitiondesk-whatsapp" });
+});
+
+/**
  * Constant-time comparison for internal secret to prevent timing side-channel attacks
  */
 function isInternalSecretValid(provided, expected) {
