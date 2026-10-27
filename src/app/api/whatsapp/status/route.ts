@@ -30,7 +30,10 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const upstreamUrl = `${WHATSAPP_SERVICE_URL}/status/${encodeURIComponent(
+    const baseUrl = (
+      process.env.WHATSAPP_SERVICE_URL || "http://localhost:3005"
+    ).replace(/\/+$/, "");
+    const upstreamUrl = `${baseUrl}/status/${encodeURIComponent(
       centerId
     )}`;
 
@@ -42,11 +45,28 @@ export async function GET(request: NextRequest) {
       cache: "no-store",
     });
 
-    const data = await res.json().catch(() => null);
+    const contentType = res.headers.get("content-type") || "";
+    let data: any = null;
+    if (contentType.includes("application/json")) {
+      data = await res.json().catch(() => null);
+    } else {
+      // Safely consume non-JSON body (e.g. Render HTML 502)
+      await res.text().catch(() => "");
+    }
 
     if (res.ok && data) {
       return NextResponse.json(data, { status: res.status });
     }
+
+    const errorMessage =
+      data?.error ||
+      (res.status === 502
+        ? "WhatsApp service is temporarily unavailable or restarting (502 Bad Gateway)"
+        : res.status === 503
+        ? "WhatsApp service is currently unavailable (503 Service Unavailable)"
+        : res.status === 504
+        ? "WhatsApp service gateway timed out (504 Gateway Timeout)"
+        : `Failed to retrieve WhatsApp status (HTTP ${res.status})`);
 
     return NextResponse.json(
       {
@@ -54,7 +74,7 @@ export async function GET(request: NextRequest) {
         centerId,
         status: "disconnected",
         ready: false,
-        error: data?.error || "Failed to retrieve WhatsApp status",
+        error: errorMessage,
       },
       { status: res.status || 502 }
     );

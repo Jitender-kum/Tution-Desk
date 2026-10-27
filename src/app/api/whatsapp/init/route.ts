@@ -28,7 +28,10 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const upstreamUrl = `${WHATSAPP_SERVICE_URL}/init/${encodeURIComponent(
+    const baseUrl = (
+      process.env.WHATSAPP_SERVICE_URL || "http://localhost:3005"
+    ).replace(/\/+$/, "");
+    const upstreamUrl = `${baseUrl}/init/${encodeURIComponent(
       centerId
     )}`;
 
@@ -40,17 +43,34 @@ export async function POST(request: NextRequest) {
       signal: AbortSignal.timeout(8000),
     });
 
-    const data = await res.json().catch(() => null);
+    const contentType = res.headers.get("content-type") || "";
+    let data: any = null;
+    if (contentType.includes("application/json")) {
+      data = await res.json().catch(() => null);
+    } else {
+      // Safely consume non-JSON body (e.g. Render HTML 502)
+      await res.text().catch(() => "");
+    }
 
     if (res.ok && data) {
       return NextResponse.json(data, { status: res.status });
     }
 
+    const errorMessage =
+      data?.error ||
+      (res.status === 502
+        ? "WhatsApp service is temporarily unavailable or restarting (502 Bad Gateway)"
+        : res.status === 503
+        ? "WhatsApp service is currently unavailable (503 Service Unavailable)"
+        : res.status === 504
+        ? "WhatsApp service initialization timed out (504 Gateway Timeout)"
+        : `Failed to initialize WhatsApp client (HTTP ${res.status})`);
+
     return NextResponse.json(
       {
         success: false,
         centerId,
-        error: data?.error || "Failed to initialize WhatsApp client",
+        error: errorMessage,
       },
       { status: res.status || 502 }
     );

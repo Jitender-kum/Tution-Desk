@@ -51,6 +51,11 @@ export default function SettingsPage() {
   const [isInitializing, setIsInitializing] = useState(false);
   const [lastPolled, setLastPolled] = useState<Date | null>(null);
 
+  const isLocalEnv =
+    typeof window !== "undefined" &&
+    (window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1");
+
   // Quick test message state
   const [testPhone, setTestPhone] = useState("");
   const [testSending, setTestSending] = useState(false);
@@ -208,11 +213,11 @@ export default function SettingsPage() {
         cache: "no-store",
       });
 
-      if (!res.ok) {
-        throw new Error(`HTTP error ${res.status}`);
-      }
+      const data = await res.json().catch(() => null);
 
-      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || `HTTP error ${res.status}`);
+      }
 
       let resolvedStatus:
         | "connected"
@@ -220,15 +225,15 @@ export default function SettingsPage() {
         | "disconnected"
         | "initializing" = "disconnected";
 
-      if (data.status === "connected" || data.ready === true) {
+      if (data?.status === "connected" || data?.ready === true) {
         resolvedStatus = "connected";
         setIsInitializing(false);
-      } else if (data.status === "qr_ready" && data.qr) {
+      } else if (data?.status === "qr_ready" && data?.qr) {
         resolvedStatus = "qr_ready";
         setIsInitializing(false);
-      } else if (data.status === "initializing") {
+      } else if (data?.status === "initializing") {
         resolvedStatus = "initializing";
-      } else if (data.status) {
+      } else if (data?.status) {
         resolvedStatus = data.status;
         setIsInitializing(false);
       } else {
@@ -237,15 +242,15 @@ export default function SettingsPage() {
 
       setStatusData({
         status: resolvedStatus,
-        qr: data.qr || null,
-        ready: Boolean(data.ready || resolvedStatus === "connected"),
-        service: data.service,
-        timestamp: data.timestamp,
-        error: data.error || undefined,
+        qr: data?.qr || null,
+        ready: Boolean(data?.ready || resolvedStatus === "connected"),
+        service: data?.service,
+        timestamp: data?.timestamp,
+        error: data?.error || undefined,
       });
       setIsOffline(false);
       setLastPolled(new Date());
-    } catch {
+    } catch (err: unknown) {
       setIsOffline(true);
       setIsInitializing(false);
       setStatusData((prev) => ({
@@ -253,6 +258,10 @@ export default function SettingsPage() {
         status: "disconnected",
         qr: null,
         ready: false,
+        error:
+          err instanceof Error
+            ? err.message
+            : "WhatsApp service is currently unreachable",
       }));
       setLastPolled(new Date());
     }
@@ -299,13 +308,23 @@ export default function SettingsPage() {
         method: "POST",
       });
       if (!res.ok) {
-        throw new Error(`Failed to initialize: HTTP ${res.status}`);
+        const data = await res.json().catch(() => null);
+        throw new Error(
+          data?.error || `Failed to initialize: HTTP ${res.status}`
+        );
       }
       // Immediate poll to pick up updated status from server
       await fetchStatus();
-    } catch (err) {
+    } catch (err: unknown) {
       console.error("Failed to generate QR code:", err);
       setIsInitializing(false);
+      setStatusData((prev) => ({
+        ...prev,
+        error:
+          err instanceof Error
+            ? err.message
+            : "Failed to initialize WhatsApp service",
+      }));
     }
   };
 
@@ -770,7 +789,7 @@ export default function SettingsPage() {
       {!isConnected && !isQrReady && (
         <div className="glass-card p-8 rounded-3xl border border-slate-200 shadow-sm space-y-5 text-center">
           {isOffline ? (
-            /* ONLY show the "Terminal Command" fallback UI if the fetch to http://localhost:3005/status/... completely throws an error (Network Error/Server actually offline). */
+            /* Show offline UI. If in local development, provide the terminal command. If in production, provide a production-aware message and status error. */
             <>
               <div className="w-14 h-14 rounded-2xl bg-rose-50 text-rose-500 flex items-center justify-center mx-auto shadow-inner border border-rose-100">
                 <WifiOff className="w-7 h-7 stroke-[1.8]" />
@@ -779,20 +798,33 @@ export default function SettingsPage() {
                 <h3 className="text-lg font-black text-slate-900 tracking-tight">
                   WhatsApp Engine is Offline
                 </h3>
-                <p className="text-xs text-slate-500 leading-relaxed font-medium">
-                  The WhatsApp microservice on port 3005 is not responding. If
-                  not running, please start it in your terminal:
-                </p>
+                {isLocalEnv ? (
+                  <p className="text-xs text-slate-500 leading-relaxed font-medium">
+                    The WhatsApp microservice on port 3005 is not responding. If
+                    not running, please start it in your terminal:
+                  </p>
+                ) : (
+                  <p className="text-xs text-slate-500 leading-relaxed font-medium">
+                    The cloud WhatsApp service is temporarily unreachable or
+                    restarting. Please wait a moment and check status again.
+                  </p>
+                )}
               </div>
 
-              <div className="p-4 bg-slate-900 text-slate-200 rounded-2xl font-mono text-xs max-w-sm mx-auto text-left shadow-inner">
-                <p className="text-slate-400 text-[10px] mb-1 font-semibold uppercase tracking-wider">
-                  # Terminal command:
-                </p>
-                <code className="text-emerald-400">cd whatsapp-server</code>
-                <br />
-                <code className="text-blue-300">node index.js</code>
-              </div>
+              {isLocalEnv ? (
+                <div className="p-4 bg-slate-900 text-slate-200 rounded-2xl font-mono text-xs max-w-sm mx-auto text-left shadow-inner">
+                  <p className="text-slate-400 text-[10px] mb-1 font-semibold uppercase tracking-wider">
+                    # Terminal command:
+                  </p>
+                  <code className="text-emerald-400">cd whatsapp-server</code>
+                  <br />
+                  <code className="text-blue-300">node index.js</code>
+                </div>
+              ) : statusData.error ? (
+                <div className="p-3 bg-rose-50/80 border border-rose-100 text-rose-700 rounded-2xl text-xs max-w-md mx-auto">
+                  <p className="font-semibold">{statusData.error}</p>
+                </div>
+              ) : null}
 
               <div className="pt-2">
                 <button
