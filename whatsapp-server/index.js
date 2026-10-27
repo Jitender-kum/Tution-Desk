@@ -83,8 +83,11 @@ app.use(authenticateInternalSecret);
 
 
 // Global Map to store active clients and states per center
-// key: centerId (string), value: { centerId, client, status, qr, isReady, error, updatedAt }
+// key: centerId (string), value: { centerId, client, status, qr, qrGeneratedAt, isReady, error, updatedAt }
 const sessions = new Map();
+
+// Guard set to prevent concurrent reconnect requests per center
+const reconnectingCenters = new Set();
 
 // Determine Chrome / Chromium executable path on Linux (Render) and Windows
 const CHROME_PATHS = [
@@ -234,6 +237,7 @@ function initializeClient(centerId) {
     client,
     status: "initializing",
     qr: null,
+    qrGeneratedAt: null,
     isReady: false,
     updatedAt: new Date().toISOString(),
   };
@@ -243,6 +247,7 @@ function initializeClient(centerId) {
   // Event: QR Code generated
   client.on("qr", (qr) => {
     sessionObj.qr = qr;
+    sessionObj.qrGeneratedAt = Date.now();
     sessionObj.status = "qr_ready";
     sessionObj.isReady = false;
     sessionObj.updatedAt = new Date().toISOString();
@@ -269,6 +274,7 @@ function initializeClient(centerId) {
     sessionObj.status = "connected";
     sessionObj.isReady = true;
     sessionObj.qr = null;
+    sessionObj.qrGeneratedAt = null;
     sessionObj.updatedAt = new Date().toISOString();
     console.log(`\n==================================================`);
     console.log(`✅ [Center: ${cleanCenterId}] WhatsApp Client is Ready!`);
@@ -280,6 +286,7 @@ function initializeClient(centerId) {
     sessionObj.status = "disconnected";
     sessionObj.isReady = false;
     sessionObj.qr = null;
+    sessionObj.qrGeneratedAt = null;
     sessionObj.error = msg;
     sessionObj.updatedAt = new Date().toISOString();
     console.error(
@@ -293,6 +300,7 @@ function initializeClient(centerId) {
     sessionObj.status = "disconnected";
     sessionObj.isReady = false;
     sessionObj.qr = null;
+    sessionObj.qrGeneratedAt = null;
     sessionObj.updatedAt = new Date().toISOString();
     console.warn(
       `⚠️ [Center: ${cleanCenterId}] WhatsApp Client Disconnected:`,
@@ -365,6 +373,7 @@ app.get("/status/:centerId", (req, res) => {
       centerId: cleanCenterId,
       status: "disconnected",
       qr: null,
+      qrGeneratedAt: null,
       ready: false,
       service: "WhatsApp Multi-Tenant Automation Microservice",
       timestamp: new Date().toISOString(),
@@ -376,6 +385,7 @@ app.get("/status/:centerId", (req, res) => {
     centerId: cleanCenterId,
     status: session.status,
     qr: session.qr,
+    qrGeneratedAt: session.qrGeneratedAt || null,
     ready: session.isReady,
     error: session.error || undefined,
     service: "WhatsApp Multi-Tenant Automation Microservice",
@@ -406,6 +416,7 @@ app.post("/init/:centerId", (req, res) => {
       centerId: cleanCenterId,
       status: session.status,
       qr: session.qr,
+      qrGeneratedAt: session.qrGeneratedAt || null,
       ready: session.isReady,
       message: `WhatsApp client initialized for center: ${cleanCenterId}`,
     });
@@ -415,6 +426,96 @@ app.post("/init/:centerId", (req, res) => {
       success: false,
       error: err instanceof Error ? err.message : "Failed to initialize client",
     });
+  }
+});
+
+/**
+ * POST /reconnect/:centerId
+ * Refreshes an unlinked/stale WhatsApp session to generate a fresh QR code.
+ * Refuses reconnection if the session is already active and connected.
+ */
+app.post("/reconnect/:centerId", async (req, res) => {
+  const cleanCenterId = String(req.params.centerId || "")
+    .trim()
+    .toLowerCase();
+
+  if (!cleanCenterId) {
+    return res.status(400).json({
+      success: false,
+      error: "centerId is required",
+    });
+  }
+
+  // Prevent concurrent reconnect requests for the same center
+  if (reconnectingCenters.has(cleanCenterId)) {
+    return res.status(409).json({
+      success: false,
+      error: "A reconnect operation is already in progress for this center.",
+    });
+  }
+
+  reconnectingCenters.add(cleanCenterId);
+
+  try {
+    const existing = sessions.get(cleanCenterId);
+
+    // If session is already connected, refuse reconnection to preserve active connection
+    if (existing && (existing.status === "connected" || existing.isReady === true)) {
+      return res.status(400).json({
+        success: false,
+        centerId: cleanCenterId,
+        status: "connected",
+        ready: true,
+        error:
+          "Cannot regenerate QR code for an active connected session. Please disconnect first if you wish to link a new number.",
+      });
+    }
+
+    console.log(
+      `[Center: ${cleanCenterId}] Reconnecting session: safely destroying previous client and requesting fresh QR...`
+    );
+
+    // Safely destroy existing client if present, without deleting credentials on disk
+    if (existing && existing.client) {
+      try {
+        await existing.client.destroy().catch((err) => {
+          console.warn(
+            `[Center: ${cleanCenterId}] Warning during client destroy on reconnect:`,
+            err.message
+          );
+        });
+      } catch (destroyErr) {
+        console.warn(
+          `[Center: ${cleanCenterId}] Error destroying client on reconnect:`,
+          destroyErr.message
+        );
+      }
+    }
+
+    // Remove stale session from memory
+    sessions.delete(cleanCenterId);
+
+    // Spawn fresh client to trigger fresh QR generation
+    const newSession = initializeClient(cleanCenterId);
+
+    return res.json({
+      success: true,
+      centerId: cleanCenterId,
+      status: newSession.status,
+      qr: newSession.qr,
+      qrGeneratedAt: newSession.qrGeneratedAt || null,
+      ready: newSession.isReady,
+      message: `Fresh QR generation initiated for center: ${cleanCenterId}`,
+    });
+  } catch (err) {
+    console.error(`[Center: ${cleanCenterId}] Reconnect failed:`, err);
+    return res.status(500).json({
+      success: false,
+      error:
+        err instanceof Error ? err.message : "Failed to reconnect WhatsApp client",
+    });
+  } finally {
+    reconnectingCenters.delete(cleanCenterId);
   }
 });
 

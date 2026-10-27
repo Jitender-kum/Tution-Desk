@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { QRCodeSVG } from "qrcode.react";
 import {
@@ -26,12 +26,14 @@ import {
   Save,
   CreditCard,
   IndianRupee,
+  X,
 } from "lucide-react";
 import apiClient, { getCurrentCenterId } from "@/lib/apiClient";
 
 interface MicroserviceStatus {
   status: "connected" | "qr_ready" | "disconnected" | "initializing" | "loading";
   qr: string | null;
+  qrGeneratedAt?: number | null;
   ready: boolean;
   service?: string;
   timestamp?: string;
@@ -49,7 +51,17 @@ export default function SettingsPage() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
+  const [isRegenerating, setIsRegenerating] = useState(false);
   const [lastPolled, setLastPolled] = useState<Date | null>(null);
+  const [currentTime, setCurrentTime] = useState<number>(Date.now());
+  const lastQrTimestampRef = useRef<number>(0);
+
+  // Periodically refresh current time while QR is displayed to keep freshness counter live
+  useEffect(() => {
+    if (statusData.status !== "qr_ready") return;
+    const interval = setInterval(() => setCurrentTime(Date.now()), 3000);
+    return () => clearInterval(interval);
+  }, [statusData.status]);
 
   const isLocalEnv =
     typeof window !== "undefined" &&
@@ -228,21 +240,37 @@ export default function SettingsPage() {
       if (data?.status === "connected" || data?.ready === true) {
         resolvedStatus = "connected";
         setIsInitializing(false);
+        setIsRegenerating(false);
       } else if (data?.status === "qr_ready" && data?.qr) {
+        // Prevent stale in-flight polling responses from overwriting a newer QR
+        if (
+          data.qrGeneratedAt &&
+          lastQrTimestampRef.current &&
+          data.qrGeneratedAt < lastQrTimestampRef.current
+        ) {
+          return;
+        }
+        if (data.qrGeneratedAt) {
+          lastQrTimestampRef.current = data.qrGeneratedAt;
+        }
         resolvedStatus = "qr_ready";
         setIsInitializing(false);
+        setIsRegenerating(false);
       } else if (data?.status === "initializing") {
         resolvedStatus = "initializing";
       } else if (data?.status) {
         resolvedStatus = data.status;
         setIsInitializing(false);
+        setIsRegenerating(false);
       } else {
         setIsInitializing(false);
+        setIsRegenerating(false);
       }
 
       setStatusData({
         status: resolvedStatus,
         qr: data?.qr || null,
+        qrGeneratedAt: data?.qrGeneratedAt || null,
         ready: Boolean(data?.ready || resolvedStatus === "connected"),
         service: data?.service,
         timestamp: data?.timestamp,
@@ -253,10 +281,12 @@ export default function SettingsPage() {
     } catch (err: unknown) {
       setIsOffline(true);
       setIsInitializing(false);
+      setIsRegenerating(false);
       setStatusData((prev) => ({
         ...prev,
         status: "disconnected",
         qr: null,
+        qrGeneratedAt: null,
         ready: false,
         error:
           err instanceof Error
@@ -281,7 +311,10 @@ export default function SettingsPage() {
     }
 
     const pollIntervalMs =
-      isInitializing || statusData.status === "initializing" || statusData.status === "qr_ready"
+      isInitializing ||
+      isRegenerating ||
+      statusData.status === "initializing" ||
+      statusData.status === "qr_ready"
         ? 3000
         : statusData.status === "connected"
         ? 15000
@@ -291,7 +324,14 @@ export default function SettingsPage() {
 
     const interval = setInterval(fetchStatus, pollIntervalMs);
     return () => clearInterval(interval);
-  }, [centerId, fetchStatus, isInitializing, statusData.status, statusData.error]);
+  }, [
+    centerId,
+    fetchStatus,
+    isInitializing,
+    isRegenerating,
+    statusData.status,
+    statusData.error,
+  ]);
 
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
@@ -301,7 +341,7 @@ export default function SettingsPage() {
 
   // Explicitly generate fresh QR code for this center
   const generateQRCode = async () => {
-    if (!centerId) return;
+    if (!centerId || isInitializing || isRegenerating) return;
     setIsInitializing(true);
     try {
       const res = await fetch("/api/whatsapp/init", {
@@ -326,6 +366,73 @@ export default function SettingsPage() {
             : "Failed to initialize WhatsApp service",
       }));
     }
+  };
+
+  // Safe reconnect and fresh QR generation for unlinked session
+  const handleRegenerateQR = async () => {
+    if (!centerId || isRegenerating || isInitializing) return;
+    setIsRegenerating(true);
+    try {
+      const res = await fetch("/api/whatsapp/reconnect", {
+        method: "POST",
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(
+          data?.error || `Failed to regenerate QR: HTTP ${res.status}`
+        );
+      }
+
+      // If backend already has new QR, update state
+      if (data?.qr) {
+        if (data.qrGeneratedAt) {
+          lastQrTimestampRef.current = data.qrGeneratedAt;
+        }
+        setStatusData((prev) => ({
+          ...prev,
+          status: "qr_ready",
+          qr: data.qr,
+          qrGeneratedAt: data.qrGeneratedAt || Date.now(),
+          ready: false,
+          error: undefined,
+        }));
+        setIsRegenerating(false);
+      } else {
+        // Awaiting fresh QR generation from newly spawned client
+        setStatusData((prev) => ({
+          ...prev,
+          status: "initializing",
+          error: undefined,
+        }));
+      }
+
+      setIsInitializing(true);
+      await fetchStatus();
+    } catch (err: unknown) {
+      console.error("Failed to regenerate QR code:", err);
+      setIsRegenerating(false);
+      setStatusData((prev) => ({
+        ...prev,
+        error:
+          err instanceof Error
+            ? err.message
+            : "Failed to regenerate WhatsApp QR code",
+      }));
+    }
+  };
+
+  // Cancel QR pairing and return to disconnected overview without deleting credentials
+  const handleCancelQR = () => {
+    setIsInitializing(false);
+    setIsRegenerating(false);
+    setStatusData((prev) => ({
+      ...prev,
+      status: "disconnected",
+      qr: null,
+      qrGeneratedAt: null,
+      ready: false,
+      error: undefined,
+    }));
   };
 
   // Disconnect & Relink WhatsApp button
@@ -750,9 +857,39 @@ export default function SettingsPage() {
                 level="M"
                 includeMargin={true}
               />
-              <div className="mt-3 flex items-center justify-center gap-1.5 text-[11px] text-slate-500 font-semibold">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
-                <span>Live QR Code • Auto-refreshes for {centerId}</span>
+              <div className="mt-3 flex flex-col items-center justify-center gap-1 text-[11px] text-slate-500 font-semibold">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                  <span>
+                    Live QR Code
+                    {statusData.qrGeneratedAt && (
+                      <span className="text-slate-400 font-normal">
+                        {" "}• Generated{" "}
+                        {Math.max(
+                          0,
+                          Math.floor(
+                            (currentTime - statusData.qrGeneratedAt) / 1000
+                          )
+                        ) < 5
+                          ? "just now"
+                          : `${Math.max(
+                              0,
+                              Math.floor(
+                                (currentTime - statusData.qrGeneratedAt) / 1000
+                              )
+                            )}s ago`}
+                      </span>
+                    )}
+                  </span>
+                </div>
+                {statusData.qrGeneratedAt &&
+                  Math.floor(
+                    (currentTime - statusData.qrGeneratedAt) / 1000
+                  ) > 50 && (
+                    <span className="text-[10px] text-amber-700 font-medium bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200/80">
+                      If scanning shows &quot;Could not link&quot;, click Regenerate below.
+                    </span>
+                  )}
               </div>
             </div>
           </div>
@@ -781,6 +918,37 @@ export default function SettingsPage() {
               </li>
               <li>Point your camera at this QR code to complete pairing.</li>
             </ol>
+          </div>
+
+          {/* Action Buttons: Regenerate QR Code & Cancel */}
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+            <button
+              type="button"
+              onClick={handleRegenerateQR}
+              disabled={isRegenerating || isInitializing}
+              className="tap-bounce inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-2xl bg-amber-600 hover:bg-amber-700 active:scale-[0.98] text-white text-xs font-bold transition-all shadow-md shadow-amber-500/20 disabled:opacity-50 cursor-pointer"
+            >
+              <RefreshCw
+                className={`w-3.5 h-3.5 ${
+                  isRegenerating ? "animate-spin" : ""
+                }`}
+              />
+              <span>
+                {isRegenerating
+                  ? "Regenerating QR Code..."
+                  : "Regenerate QR Code"}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleCancelQR}
+              disabled={isRegenerating}
+              className="tap-bounce inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-800 text-xs font-bold transition-all disabled:opacity-50 cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+              <span>Cancel</span>
+            </button>
           </div>
         </div>
       )}
