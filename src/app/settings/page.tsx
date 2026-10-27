@@ -28,7 +28,7 @@ import {
   IndianRupee,
   X,
 } from "lucide-react";
-import apiClient, { getCurrentCenterId } from "@/lib/apiClient";
+import { getCurrentCenterId } from "@/lib/apiClient";
 
 interface MicroserviceStatus {
   status: "connected" | "qr_ready" | "disconnected" | "initializing" | "loading";
@@ -117,10 +117,8 @@ export default function SettingsPage() {
   useEffect(() => {
     if (!centerId) return;
 
-    apiClient<{ welcomeMessageTemplate?: string; upiId?: string }>(
-      "/centers/settings",
-      { params: { centerId } }
-    )
+    fetch("/api/centers/settings")
+      .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data?.data?.welcomeMessageTemplate) {
           setWelcomeMessageTemplate(data.data.welcomeMessageTemplate);
@@ -144,18 +142,17 @@ export default function SettingsPage() {
     setTemplateSaveStatus(null);
 
     try {
-      const data = await apiClient<{ welcomeMessageTemplate?: string }>(
-        "/centers/settings",
-        {
-          method: "PUT",
-          body: {
-            centerId,
-            welcomeMessageTemplate,
-          },
-        }
-      );
+      const res = await fetch("/api/centers/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          welcomeMessageTemplate,
+        }),
+      });
 
-      if (data?.success) {
+      const data = await res.json().catch(() => null);
+
+      if (res.ok && data?.success) {
         setTemplateSaveStatus({
           type: "success",
           message:
@@ -182,15 +179,17 @@ export default function SettingsPage() {
     setUpiSaveStatus(null);
 
     try {
-      const data = await apiClient<{ upiId?: string }>("/centers/settings", {
+      const res = await fetch("/api/centers/settings", {
         method: "PUT",
-        body: {
-          centerId,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
           upiId: upiId.trim(),
-        },
+        }),
       });
 
-      if (data?.success) {
+      const data = await res.json().catch(() => null);
+
+      if (res.ok && data?.success) {
         setUpiSaveStatus({
           type: "success",
           message:
