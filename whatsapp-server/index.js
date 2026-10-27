@@ -88,35 +88,51 @@ const sessions = new Map();
 
 // Determine Chrome / Chromium executable path on Linux (Render) and Windows
 const CHROME_PATHS = [
-  "/usr/bin/google-chrome-stable",
-  "/usr/bin/google-chrome",
   "/usr/bin/chromium",
   "/usr/bin/chromium-browser",
+  "/usr/bin/google-chrome-stable",
+  "/usr/bin/google-chrome",
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-  process.env.LOCALAPPDATA + "\\Google\\Chrome\\Application\\chrome.exe",
-  "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+  process.env.LOCALAPPDATA
+    ? path.join(process.env.LOCALAPPDATA, "Google\\Chrome\\Application\\chrome.exe")
+    : null,
   "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-];
+  "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+].filter(Boolean);
 
 function getExecutablePath() {
-  if (
+  // 1. Explicitly check PUPPETEER_EXECUTABLE_PATH environment variable
+  const envPath =
     process.env.PUPPETEER_EXECUTABLE_PATH &&
-    fs.existsSync(process.env.PUPPETEER_EXECUTABLE_PATH)
-  ) {
-    return process.env.PUPPETEER_EXECUTABLE_PATH;
+    process.env.PUPPETEER_EXECUTABLE_PATH.trim();
+  if (envPath && fs.existsSync(envPath)) {
+    return envPath;
   }
+
+  // 2. Explicitly check standard Linux Chromium binary path
+  const linuxChromium = "/usr/bin/chromium";
+  if (fs.existsSync(linuxChromium)) {
+    return linuxChromium;
+  }
+
+  // 3. Fallback to other known system browser paths
   for (const p of CHROME_PATHS) {
     if (p && fs.existsSync(p)) {
       return p;
     }
   }
+
   return undefined;
 }
 
 const chromePath = getExecutablePath();
 if (chromePath) {
-  console.log(`[Browser Engine] Using system browser: ${chromePath}`);
+  console.log(`[Browser Engine] Using system browser executable: ${chromePath}`);
+} else {
+  console.warn(
+    "[Browser Engine] No system browser found at PUPPETEER_EXECUTABLE_PATH, /usr/bin/chromium, or standard paths. Puppeteer will fall back to bundled browser."
+  );
 }
 
 /**
@@ -177,8 +193,11 @@ function initializeClient(centerId) {
     }
   }
 
+  const resolvedExecutable = getExecutablePath() || chromePath;
   console.log(
-    `[Session: ${cleanCenterId}] Initializing WhatsApp Web Client with LocalAuth clientId...`
+    `[Session: ${cleanCenterId}] Initializing WhatsApp Web Client with LocalAuth (Browser: ${
+      resolvedExecutable || "bundled-fallback"
+    })...`
   );
 
   const client = new Client({
@@ -188,7 +207,7 @@ function initializeClient(centerId) {
     }),
     puppeteer: {
       headless: true,
-      executablePath: chromePath || getExecutablePath(),
+      executablePath: resolvedExecutable || undefined,
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
