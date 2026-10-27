@@ -55,6 +55,20 @@ export default function SettingsPage() {
   const [lastPolled, setLastPolled] = useState<Date | null>(null);
   const [currentTime, setCurrentTime] = useState<number>(Date.now());
   const lastQrTimestampRef = useRef<number>(0);
+  const isFetchingRef = useRef<boolean>(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const isMountedRef = useRef<boolean>(true);
+  const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Track mount state and abort any active polling/fetch on unmount
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+      if (abortControllerRef.current) abortControllerRef.current.abort();
+    };
+  }, []);
 
   // Periodically refresh current time while QR is displayed to keep freshness counter live
   useEffect(() => {
@@ -216,97 +230,136 @@ export default function SettingsPage() {
   };
 
   // 2. Poll center-specific status: http://localhost:3005/status/:centerId
-  const fetchStatus = useCallback(async () => {
-    if (!centerId) return;
+  const fetchStatus = useCallback(
+    async (isManualTrigger = false) => {
+      if (!centerId || !isMountedRef.current) return;
 
-    try {
-      const res = await fetch("/api/whatsapp/status", {
-        cache: "no-store",
-      });
-
-      const data = await res.json().catch(() => null);
-
-      if (!res.ok) {
-        throw new Error(data?.error || `HTTP error ${res.status}`);
+      // Prevent overlapping status requests unless manually requested
+      if (isFetchingRef.current && !isManualTrigger) {
+        return;
       }
 
-      let resolvedStatus:
-        | "connected"
-        | "qr_ready"
-        | "disconnected"
-        | "initializing" = "disconnected";
+      // Abort any prior in-flight request before launching new one
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+      isFetchingRef.current = true;
 
-      if (data?.status === "connected" || data?.ready === true) {
-        resolvedStatus = "connected";
-        setIsInitializing(false);
-        setIsRegenerating(false);
-      } else if (data?.status === "qr_ready" && data?.qr) {
-        // Prevent stale in-flight polling responses from overwriting a newer QR
-        if (
-          data.qrGeneratedAt &&
-          lastQrTimestampRef.current &&
-          data.qrGeneratedAt < lastQrTimestampRef.current
-        ) {
+      try {
+        const res = await fetch("/api/whatsapp/status", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+
+        const data = await res.json().catch(() => null);
+
+        if (!isMountedRef.current) return;
+
+        if (!res.ok) {
+          throw new Error(data?.error || `HTTP error ${res.status}`);
+        }
+
+        let resolvedStatus:
+          | "connected"
+          | "qr_ready"
+          | "disconnected"
+          | "initializing" = "disconnected";
+
+        if (data?.status === "connected" || data?.ready === true) {
+          resolvedStatus = "connected";
+          setIsInitializing(false);
+          setIsRegenerating(false);
+        } else if (data?.status === "qr_ready" && data?.qr) {
+          // Prevent stale in-flight polling responses from overwriting a newer QR
+          if (
+            data.qrGeneratedAt &&
+            lastQrTimestampRef.current &&
+            data.qrGeneratedAt < lastQrTimestampRef.current
+          ) {
+            return;
+          }
+          if (data.qrGeneratedAt) {
+            lastQrTimestampRef.current = data.qrGeneratedAt;
+          }
+          resolvedStatus = "qr_ready";
+          setIsInitializing(false);
+          setIsRegenerating(false);
+        } else if (data?.status === "initializing") {
+          resolvedStatus = "initializing";
+        } else if (data?.status) {
+          resolvedStatus = data.status;
+          setIsInitializing(false);
+          setIsRegenerating(false);
+        } else {
+          setIsInitializing(false);
+          setIsRegenerating(false);
+        }
+
+        setStatusData({
+          status: resolvedStatus,
+          qr: data?.qr || null,
+          qrGeneratedAt: data?.qrGeneratedAt || null,
+          ready: Boolean(data?.ready || resolvedStatus === "connected"),
+          service: data?.service,
+          timestamp: data?.timestamp,
+          error: data?.error || undefined,
+        });
+        setIsOffline(false);
+        setLastPolled(new Date());
+      } catch (err: unknown) {
+        if (!isMountedRef.current) return;
+        if (err instanceof Error && err.name === "AbortError") {
+          // Clean abortion on component unmount or newer request, do not update state
           return;
         }
-        if (data.qrGeneratedAt) {
-          lastQrTimestampRef.current = data.qrGeneratedAt;
-        }
-        resolvedStatus = "qr_ready";
+        setIsOffline(true);
         setIsInitializing(false);
         setIsRegenerating(false);
-      } else if (data?.status === "initializing") {
-        resolvedStatus = "initializing";
-      } else if (data?.status) {
-        resolvedStatus = data.status;
-        setIsInitializing(false);
-        setIsRegenerating(false);
-      } else {
-        setIsInitializing(false);
-        setIsRegenerating(false);
+        setStatusData((prev) => ({
+          ...prev,
+          status: "disconnected",
+          qr: null,
+          qrGeneratedAt: null,
+          ready: false,
+          error:
+            err instanceof Error
+              ? err.message
+              : "WhatsApp service is currently unreachable",
+        }));
+        setLastPolled(new Date());
+      } finally {
+        isFetchingRef.current = false;
       }
+    },
+    [centerId]
+  );
 
-      setStatusData({
-        status: resolvedStatus,
-        qr: data?.qr || null,
-        qrGeneratedAt: data?.qrGeneratedAt || null,
-        ready: Boolean(data?.ready || resolvedStatus === "connected"),
-        service: data?.service,
-        timestamp: data?.timestamp,
-        error: data?.error || undefined,
-      });
-      setIsOffline(false);
-      setLastPolled(new Date());
-    } catch (err: unknown) {
-      setIsOffline(true);
-      setIsInitializing(false);
-      setIsRegenerating(false);
-      setStatusData((prev) => ({
-        ...prev,
-        status: "disconnected",
-        qr: null,
-        qrGeneratedAt: null,
-        ready: false,
-        error:
-          err instanceof Error
-            ? err.message
-            : "WhatsApp service is currently unreachable",
-      }));
-      setLastPolled(new Date());
-    }
-  }, [centerId]);
-
-  // Polling loop:
-  // - Polls every 3s while initializing or awaiting QR code scan (qr_ready)
-  // - Polls every 15s when connected (keep-alive heartbeat)
-  // - Stops polling when disconnected (unless actively initializing) or when an error occurred
+  // Initial status fetch once centerId is resolved
   useEffect(() => {
     if (!centerId) return;
-    fetchStatus();
+    fetchStatus(true);
+  }, [centerId, fetchStatus]);
 
-    // If an error occurred or session is disconnected while not initializing, do not poll continuously
-    if (statusData.error || (statusData.status === "disconnected" && !isInitializing)) {
-      return;
+  // Chained adaptive polling loop:
+  // - Polls every 3s while initializing or awaiting QR code scan (qr_ready)
+  // - Polls every 15s when connected (keep-alive heartbeat)
+  // - Halts polling when disconnected (unless actively initializing) or when an error occurred
+  useEffect(() => {
+    if (!centerId) return;
+
+    let isEffectActive = true;
+
+    // If an error occurred or session is disconnected while not actively pairing, do not poll
+    if (
+      statusData.error ||
+      (statusData.status === "disconnected" && !isInitializing && !isRegenerating)
+    ) {
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+      return () => {
+        isEffectActive = false;
+      };
     }
 
     const pollIntervalMs =
@@ -321,8 +374,16 @@ export default function SettingsPage() {
 
     if (!pollIntervalMs) return;
 
-    const interval = setInterval(fetchStatus, pollIntervalMs);
-    return () => clearInterval(interval);
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    pollTimerRef.current = setTimeout(async () => {
+      if (!isEffectActive || !isMountedRef.current) return;
+      await fetchStatus();
+    }, pollIntervalMs);
+
+    return () => {
+      isEffectActive = false;
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    };
   }, [
     centerId,
     fetchStatus,
@@ -334,7 +395,7 @@ export default function SettingsPage() {
 
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
-    await fetchStatus();
+    await fetchStatus(true);
     setTimeout(() => setIsRefreshing(false), 500);
   };
 
@@ -353,7 +414,7 @@ export default function SettingsPage() {
         );
       }
       // Immediate poll to pick up updated status from server
-      await fetchStatus();
+      await fetchStatus(true);
     } catch (err: unknown) {
       console.error("Failed to generate QR code:", err);
       setIsInitializing(false);
@@ -406,7 +467,7 @@ export default function SettingsPage() {
       }
 
       setIsInitializing(true);
-      await fetchStatus();
+      await fetchStatus(true);
     } catch (err: unknown) {
       console.error("Failed to regenerate QR code:", err);
       setIsRegenerating(false);
@@ -424,6 +485,8 @@ export default function SettingsPage() {
   const handleCancelQR = () => {
     setIsInitializing(false);
     setIsRegenerating(false);
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    if (abortControllerRef.current) abortControllerRef.current.abort();
     setStatusData((prev) => ({
       ...prev,
       status: "disconnected",

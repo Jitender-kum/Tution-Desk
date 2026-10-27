@@ -86,8 +86,41 @@ app.use(authenticateInternalSecret);
 // key: centerId (string), value: { centerId, client, status, qr, qrGeneratedAt, isReady, error, updatedAt }
 const sessions = new Map();
 
-// Guard set to prevent concurrent reconnect requests per center
-const reconnectingCenters = new Set();
+// Unified per-center operation locks to prevent race conditions across /init, /reconnect, /logout
+const activeLocks = new Set();
+
+// In-flight initialization promises to deduplicate concurrent /init requests: centerId -> Promise<sessionObj>
+const inFlightInitPromises = new Map();
+
+// Set of centerIds that have saved authentication directories on disk (lazy on-demand startup)
+const savedSessionCenters = new Set();
+
+/**
+ * Safely destroys a Puppeteer client instance with a bounded timeout and cleans all listeners.
+ * Prevents orphaned Chromium processes and zombie pages from leaking RAM.
+ */
+async function destroyClientSafely(client, centerId) {
+  if (!client) return;
+  try {
+    if (typeof client.removeAllListeners === "function") {
+      client.removeAllListeners();
+    }
+    const destroyPromise = client.destroy().catch((err) => {
+      console.warn(
+        `[Center: ${centerId}] Warning during client destroy:`,
+        err?.message || err
+      );
+    });
+    // Bounded timeout of 5 seconds so client destruction never hangs the event loop
+    const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 5000));
+    await Promise.race([destroyPromise, timeoutPromise]);
+  } catch (err) {
+    console.warn(
+      `[Center: ${centerId}] Exception destroying client:`,
+      err?.message || err
+    );
+  }
+}
 
 // Determine Chrome / Chromium executable path on Linux (Render) and Windows
 const CHROME_PATHS = [
@@ -176,7 +209,7 @@ migrateLegacySession();
 /**
  * Helper: Initializes a new WhatsApp Web client for a specific Center
  */
-function initializeClient(centerId) {
+async function initializeClient(centerId) {
   if (!centerId) throw new Error("centerId is required to initialize client");
   const cleanCenterId = String(centerId).trim().toLowerCase();
 
@@ -193,6 +226,15 @@ function initializeClient(centerId) {
         `[Session: ${cleanCenterId}] Returning existing active session (Status: ${existing.status})`
       );
       return existing;
+    }
+
+    // If previous client is in disconnected/errored state, safely destroy it before re-instantiating
+    if (existing.client) {
+      console.log(
+        `[Session: ${cleanCenterId}] Cleaning up stale/disconnected client process before re-initializing...`
+      );
+      await destroyClientSafely(existing.client, cleanCenterId);
+      existing.client = null;
     }
   }
 
@@ -275,6 +317,7 @@ function initializeClient(centerId) {
     sessionObj.isReady = true;
     sessionObj.qr = null;
     sessionObj.qrGeneratedAt = null;
+    sessionObj.error = null;
     sessionObj.updatedAt = new Date().toISOString();
     console.log(`\n==================================================`);
     console.log(`✅ [Center: ${cleanCenterId}] WhatsApp Client is Ready!`);
@@ -282,7 +325,7 @@ function initializeClient(centerId) {
   });
 
   // Event: Auth Failure
-  client.on("auth_failure", (msg) => {
+  client.on("auth_failure", async (msg) => {
     sessionObj.status = "disconnected";
     sessionObj.isReady = false;
     sessionObj.qr = null;
@@ -293,10 +336,13 @@ function initializeClient(centerId) {
       `❌ [Center: ${cleanCenterId}] WhatsApp Authentication Failure:`,
       msg
     );
+    // Destroy client process safely on auth failure to free memory
+    await destroyClientSafely(client, cleanCenterId);
+    sessionObj.client = null;
   });
 
   // Event: Disconnected
-  client.on("disconnected", (reason) => {
+  client.on("disconnected", async (reason) => {
     sessionObj.status = "disconnected";
     sessionObj.isReady = false;
     sessionObj.qr = null;
@@ -306,17 +352,24 @@ function initializeClient(centerId) {
       `⚠️ [Center: ${cleanCenterId}] WhatsApp Client Disconnected:`,
       reason
     );
+    // Destroy client process safely on disconnect to free memory
+    await destroyClientSafely(client, cleanCenterId);
+    sessionObj.client = null;
   });
 
   // Start initialization
-  client.initialize().catch((err) => {
+  client.initialize().catch(async (err) => {
     console.error(
       `❌ [Center: ${cleanCenterId}] Client initialization failed:`,
-      err
+      err?.message || err
     );
     sessionObj.status = "disconnected";
     sessionObj.isReady = false;
     sessionObj.error = err instanceof Error ? err.message : String(err);
+    sessionObj.updatedAt = new Date().toISOString();
+    // Destroy client process on initialization failure to prevent orphaned browser
+    await destroyClientSafely(client, cleanCenterId);
+    sessionObj.client = null;
   });
 
   return sessionObj;
@@ -327,24 +380,47 @@ function initializeClient(centerId) {
 // -------------------------------------------------------------
 
 /**
- * Global health check endpoint
+ * Global health and diagnostics endpoint
+ * Exposes lightweight runtime memory, active client counts, and session states.
+ * Never exposes QR payloads, phone numbers, or credentials.
  */
 app.get("/status", (req, res) => {
-  const activeSessions = [];
+  const mem = process.memoryUsage();
+  let activeClientsCount = 0;
+  let readySessionsCount = 0;
+
+  const sessionSummaries = [];
   for (const [id, s] of sessions.entries()) {
-    activeSessions.push({
+    if (s.client) activeClientsCount++;
+    if (s.isReady) readySessionsCount++;
+    sessionSummaries.push({
       centerId: id,
       status: s.status,
       ready: s.isReady,
       hasQR: Boolean(s.qr),
+      hasClientProcess: Boolean(s.client),
+      updatedAt: s.updatedAt,
     });
   }
 
   res.json({
     success: true,
     service: "WhatsApp Multi-Tenant Automation Microservice",
-    totalSessions: sessions.size,
-    sessions: activeSessions,
+    uptimeSeconds: Math.floor(process.uptime()),
+    memory: {
+      rssMb: Math.round((mem.rss / 1024 / 1024) * 100) / 100,
+      heapUsedMb: Math.round((mem.heapUsed / 1024 / 1024) * 100) / 100,
+      heapTotalMb: Math.round((mem.heapTotal / 1024 / 1024) * 100) / 100,
+      externalMb: Math.round((mem.external / 1024 / 1024) * 100) / 100,
+    },
+    counts: {
+      totalTrackedSessions: sessions.size,
+      activeClientProcesses: activeClientsCount,
+      readySessions: readySessionsCount,
+      activeLocks: activeLocks.size,
+      savedSessionsOnDisk: savedSessionCenters.size,
+    },
+    sessions: sessionSummaries,
     timestamp: new Date().toISOString(),
   });
 });
@@ -352,6 +428,7 @@ app.get("/status", (req, res) => {
 /**
  * GET /status/:centerId
  * Returns the specific status and QR code for that center.
+ * Does not initialize or launch Chromium as a side effect.
  */
 app.get("/status/:centerId", (req, res) => {
   const cleanCenterId = String(req.params.centerId || "")
@@ -368,10 +445,12 @@ app.get("/status/:centerId", (req, res) => {
   const session = sessions.get(cleanCenterId);
 
   if (!session) {
+    const hasSavedSession = savedSessionCenters.has(cleanCenterId);
     return res.json({
       success: true,
       centerId: cleanCenterId,
       status: "disconnected",
+      hasSavedSession,
       qr: null,
       qrGeneratedAt: null,
       ready: false,
@@ -387,6 +466,7 @@ app.get("/status/:centerId", (req, res) => {
     qr: session.qr,
     qrGeneratedAt: session.qrGeneratedAt || null,
     ready: session.isReady,
+    hasClientProcess: Boolean(session.client),
     error: session.error || undefined,
     service: "WhatsApp Multi-Tenant Automation Microservice",
     timestamp: new Date().toISOString(),
@@ -395,9 +475,10 @@ app.get("/status/:centerId", (req, res) => {
 
 /**
  * POST /init/:centerId
- * Calls initializeClient(centerId) if not already running.
+ * Calls initializeClient(centerId) safely.
+ * Deduplicates in-flight initialization requests and prevents multiple Chromium launches.
  */
-app.post("/init/:centerId", (req, res) => {
+app.post("/init/:centerId", async (req, res) => {
   const cleanCenterId = String(req.params.centerId || "")
     .trim()
     .toLowerCase();
@@ -409,8 +490,70 @@ app.post("/init/:centerId", (req, res) => {
     });
   }
 
+  // 1. If already active or initializing, return existing without launching another browser
+  if (sessions.has(cleanCenterId)) {
+    const existing = sessions.get(cleanCenterId);
+    if (
+      existing.status === "connected" ||
+      existing.status === "qr_ready" ||
+      existing.status === "initializing" ||
+      existing.status === "authenticated"
+    ) {
+      return res.json({
+        success: true,
+        centerId: cleanCenterId,
+        status: existing.status,
+        qr: existing.qr,
+        qrGeneratedAt: existing.qrGeneratedAt || null,
+        ready: existing.isReady,
+        message: `WhatsApp client is already active for center: ${cleanCenterId}`,
+      });
+    }
+  }
+
+  // 2. If an in-flight initialization promise exists for this center, await it (deduplicate concurrent requests)
+  if (inFlightInitPromises.has(cleanCenterId)) {
+    try {
+      const session = await inFlightInitPromises.get(cleanCenterId);
+      return res.json({
+        success: true,
+        centerId: cleanCenterId,
+        status: session.status,
+        qr: session.qr,
+        qrGeneratedAt: session.qrGeneratedAt || null,
+        ready: session.isReady,
+        message: `WhatsApp client initialized for center: ${cleanCenterId}`,
+      });
+    } catch (err) {
+      return res.status(500).json({
+        success: false,
+        error: err instanceof Error ? err.message : "Failed to initialize client",
+      });
+    }
+  }
+
+  // 3. Prevent race conditions if a reconnect or logout operation is currently running
+  if (activeLocks.has(cleanCenterId)) {
+    return res.status(409).json({
+      success: false,
+      error: "An operation is already in progress for this center. Please wait a moment.",
+    });
+  }
+
+  activeLocks.add(cleanCenterId);
+  const initPromise = (async () => {
+    try {
+      return await initializeClient(cleanCenterId);
+    } finally {
+      activeLocks.delete(cleanCenterId);
+      inFlightInitPromises.delete(cleanCenterId);
+    }
+  })();
+
+  inFlightInitPromises.set(cleanCenterId, initPromise);
+
   try {
-    const session = initializeClient(cleanCenterId);
+    const session = await initPromise;
     return res.json({
       success: true,
       centerId: cleanCenterId,
@@ -446,57 +589,57 @@ app.post("/reconnect/:centerId", async (req, res) => {
     });
   }
 
-  // Prevent concurrent reconnect requests for the same center
-  if (reconnectingCenters.has(cleanCenterId)) {
+  // Prevent concurrent operations (init, reconnect, or logout)
+  if (activeLocks.has(cleanCenterId) || inFlightInitPromises.has(cleanCenterId)) {
     return res.status(409).json({
       success: false,
-      error: "A reconnect operation is already in progress for this center.",
+      error: "An operation is already in progress for this center. Please wait a moment.",
     });
   }
 
-  reconnectingCenters.add(cleanCenterId);
+  const existing = sessions.get(cleanCenterId);
+
+  // If session is already connected, refuse reconnection to preserve active connection
+  if (existing && (existing.status === "connected" || existing.isReady === true)) {
+    return res.status(400).json({
+      success: false,
+      centerId: cleanCenterId,
+      status: "connected",
+      ready: true,
+      error:
+        "Cannot regenerate QR code for an active connected session. Please disconnect first if you wish to link a new number.",
+    });
+  }
+
+  // If session is currently initializing or authenticating, refuse concurrent reconnect
+  if (existing && (existing.status === "initializing" || existing.status === "authenticated")) {
+    return res.status(409).json({
+      success: false,
+      centerId: cleanCenterId,
+      status: existing.status,
+      error:
+        "WhatsApp client is currently initializing for this center. Please wait a moment before requesting another QR.",
+    });
+  }
+
+  activeLocks.add(cleanCenterId);
 
   try {
-    const existing = sessions.get(cleanCenterId);
-
-    // If session is already connected, refuse reconnection to preserve active connection
-    if (existing && (existing.status === "connected" || existing.isReady === true)) {
-      return res.status(400).json({
-        success: false,
-        centerId: cleanCenterId,
-        status: "connected",
-        ready: true,
-        error:
-          "Cannot regenerate QR code for an active connected session. Please disconnect first if you wish to link a new number.",
-      });
-    }
-
     console.log(
       `[Center: ${cleanCenterId}] Reconnecting session: safely destroying previous client and requesting fresh QR...`
     );
 
     // Safely destroy existing client if present, without deleting credentials on disk
     if (existing && existing.client) {
-      try {
-        await existing.client.destroy().catch((err) => {
-          console.warn(
-            `[Center: ${cleanCenterId}] Warning during client destroy on reconnect:`,
-            err.message
-          );
-        });
-      } catch (destroyErr) {
-        console.warn(
-          `[Center: ${cleanCenterId}] Error destroying client on reconnect:`,
-          destroyErr.message
-        );
-      }
+      await destroyClientSafely(existing.client, cleanCenterId);
+      existing.client = null;
     }
 
     // Remove stale session from memory
     sessions.delete(cleanCenterId);
 
     // Spawn fresh client to trigger fresh QR generation
-    const newSession = initializeClient(cleanCenterId);
+    const newSession = await initializeClient(cleanCenterId);
 
     return res.json({
       success: true,
@@ -515,7 +658,7 @@ app.post("/reconnect/:centerId", async (req, res) => {
         err instanceof Error ? err.message : "Failed to reconnect WhatsApp client",
     });
   } finally {
-    reconnectingCenters.delete(cleanCenterId);
+    activeLocks.delete(cleanCenterId);
   }
 });
 
@@ -649,32 +792,44 @@ app.post("/logout/:centerId", async (req, res) => {
     });
   }
 
-  const session = sessions.get(cleanCenterId);
-
-  if (!session) {
-    return res.json({
-      success: true,
-      message: `No active session found for center: ${cleanCenterId}`,
+  // Prevent concurrent operation during logout
+  if (activeLocks.has(cleanCenterId)) {
+    return res.status(409).json({
+      success: false,
+      error: "An operation is already in progress for this center. Please wait a moment.",
     });
   }
 
-  console.log(`[Center: ${cleanCenterId}] Logging out and clearing session...`);
+  activeLocks.add(cleanCenterId);
 
   try {
-    if (session.client) {
-      await session.client.logout().catch((e) => {
-        console.warn(`Logout error for ${cleanCenterId}:`, e.message);
-      });
-      await session.client.destroy().catch((e) => {
-        console.warn(`Destroy error for ${cleanCenterId}:`, e.message);
+    const session = sessions.get(cleanCenterId);
+
+    if (!session) {
+      return res.json({
+        success: true,
+        message: `No active session found for center: ${cleanCenterId}`,
       });
     }
-  } catch (err) {
-    console.warn(`Error during client logout/destroy for ${cleanCenterId}:`, err);
-  } finally {
-    sessions.delete(cleanCenterId);
 
-    // Clean up local auth directory for this center so new QR code will be generated fresh
+    console.log(`[Center: ${cleanCenterId}] Logging out and clearing session...`);
+
+    if (session.client) {
+      try {
+        await session.client.logout().catch((e) => {
+          console.warn(`Logout error for ${cleanCenterId}:`, e.message);
+        });
+      } catch (err) {
+        console.warn(`Error during client logout for ${cleanCenterId}:`, err.message);
+      }
+      await destroyClientSafely(session.client, cleanCenterId);
+      session.client = null;
+    }
+
+    sessions.delete(cleanCenterId);
+    savedSessionCenters.delete(cleanCenterId);
+
+    // Clean up local auth directory for this center only on explicit logout
     try {
       const sessionDir = path.join(
         __dirname,
@@ -688,38 +843,79 @@ app.post("/logout/:centerId", async (req, res) => {
     } catch (cleanupErr) {
       console.warn("Could not delete session directory:", cleanupErr.message);
     }
-  }
 
-  return res.json({
-    success: true,
-    centerId: cleanCenterId,
-    message: `WhatsApp session disconnected for center: ${cleanCenterId}. Ready for fresh pairing.`,
-  });
+    return res.json({
+      success: true,
+      centerId: cleanCenterId,
+      message: `WhatsApp session disconnected for center: ${cleanCenterId}. Ready for fresh pairing.`,
+    });
+  } catch (err) {
+    console.error(`Logout failed for ${cleanCenterId}:`, err);
+    return res.status(500).json({
+      success: false,
+      error: err instanceof Error ? err.message : "Failed to logout session",
+    });
+  } finally {
+    activeLocks.delete(cleanCenterId);
+  }
 });
 
-// Auto-initialize existing centers if sessions directory exists
+// Scan saved session directories for awareness without eagerly launching Chromium
 try {
   const authRoot = path.join(__dirname, ".wwebjs_auth");
   if (fs.existsSync(authRoot)) {
     const entries = fs.readdirSync(authRoot, { withFileTypes: true });
     for (const ent of entries) {
       if (ent.isDirectory() && ent.name.startsWith("session-")) {
-        const id = ent.name.replace("session-", "");
+        const id = ent.name.replace("session-", "").trim().toLowerCase();
         if (id) {
-          console.log(`⚡ Auto-initializing saved session for center: ${id}`);
-          initializeClient(id);
+          savedSessionCenters.add(id);
+          console.log(
+            `📁 Discovered saved session directory for center: ${id} (lazy on-demand startup ready)`
+          );
         }
       }
     }
   }
 } catch (scanErr) {
-  console.warn("Could not auto-scan saved sessions:", scanErr.message);
+  console.warn("Could not scan saved sessions:", scanErr.message);
 }
 
 // Start Express Server
-app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, () => {
   console.log(`🚀 Multi-Tenant WhatsApp Microservice listening on http://${HOST}:${PORT}`);
 });
+
+// Graceful shutdown handling with bounded client cleanup
+let isShuttingDown = false;
+async function handleGracefulShutdown(signal) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.log(`\n🛑 Received ${signal}. Starting graceful shutdown of WhatsApp Microservice...`);
+
+  // Close HTTP server to stop accepting new requests
+  server.close(() => {
+    console.log("🔒 HTTP server closed to new connections.");
+  });
+
+  const destroyPromises = [];
+  for (const [centerId, session] of sessions.entries()) {
+    if (session.client) {
+      console.log(`[Center: ${centerId}] Closing WhatsApp client on shutdown...`);
+      destroyPromises.push(destroyClientSafely(session.client, centerId));
+    }
+  }
+
+  // Bounded timeout: max 5 seconds for cleanup before exiting
+  const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 5000));
+  await Promise.race([Promise.allSettled(destroyPromises), timeoutPromise]);
+
+  console.log("👋 Graceful shutdown complete. Exiting process.");
+  process.exit(0);
+}
+
+process.on("SIGTERM", () => handleGracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => handleGracefulShutdown("SIGINT"));
 
 // Guard against unhandled library exceptions to keep server resilient
 process.on("unhandledRejection", (reason) => {
