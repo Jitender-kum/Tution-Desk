@@ -86,8 +86,12 @@ app.use(authenticateInternalSecret);
 // key: centerId (string), value: { centerId, client, status, qr, isReady, error, updatedAt }
 const sessions = new Map();
 
-// Determine Chrome / Chromium executable path on Windows
+// Determine Chrome / Chromium executable path on Linux (Render) and Windows
 const CHROME_PATHS = [
+  "/usr/bin/google-chrome-stable",
+  "/usr/bin/google-chrome",
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
   process.env.LOCALAPPDATA + "\\Google\\Chrome\\Application\\chrome.exe",
@@ -184,7 +188,7 @@ function initializeClient(centerId) {
     }),
     puppeteer: {
       headless: true,
-      executablePath: chromePath,
+      executablePath: chromePath || getExecutablePath(),
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -345,6 +349,7 @@ app.get("/status/:centerId", (req, res) => {
     status: session.status,
     qr: session.qr,
     ready: session.isReady,
+    error: session.error || undefined,
     service: "WhatsApp Multi-Tenant Automation Microservice",
     timestamp: new Date().toISOString(),
   });

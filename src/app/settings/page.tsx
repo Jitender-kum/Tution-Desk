@@ -35,6 +35,7 @@ interface MicroserviceStatus {
   ready: boolean;
   service?: string;
   timestamp?: string;
+  error?: string;
 }
 
 export default function SettingsPage() {
@@ -229,6 +230,9 @@ export default function SettingsPage() {
         resolvedStatus = "initializing";
       } else if (data.status) {
         resolvedStatus = data.status;
+        setIsInitializing(false);
+      } else {
+        setIsInitializing(false);
       }
 
       setStatusData({
@@ -237,6 +241,7 @@ export default function SettingsPage() {
         ready: Boolean(data.ready || resolvedStatus === "connected"),
         service: data.service,
         timestamp: data.timestamp,
+        error: data.error || undefined,
       });
       setIsOffline(false);
       setLastPolled(new Date());
@@ -253,13 +258,31 @@ export default function SettingsPage() {
     }
   }, [centerId]);
 
-  // Polling loop (every 3 seconds)
+  // Polling loop:
+  // - Polls every 3s while initializing or awaiting QR code scan (qr_ready)
+  // - Polls every 15s when connected (keep-alive heartbeat)
+  // - Stops polling when disconnected (unless actively initializing) or when an error occurred
   useEffect(() => {
     if (!centerId) return;
     fetchStatus();
-    const interval = setInterval(fetchStatus, 3000);
+
+    // If an error occurred or session is disconnected while not initializing, do not poll continuously
+    if (statusData.error || (statusData.status === "disconnected" && !isInitializing)) {
+      return;
+    }
+
+    const pollIntervalMs =
+      isInitializing || statusData.status === "initializing" || statusData.status === "qr_ready"
+        ? 3000
+        : statusData.status === "connected"
+        ? 15000
+        : null;
+
+    if (!pollIntervalMs) return;
+
+    const interval = setInterval(fetchStatus, pollIntervalMs);
     return () => clearInterval(interval);
-  }, [centerId, fetchStatus]);
+  }, [centerId, fetchStatus, isInitializing, statusData.status, statusData.error]);
 
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
@@ -823,6 +846,13 @@ export default function SettingsPage() {
                   )}
                 </button>
               </div>
+
+              {statusData.error && (
+                <div className="p-3.5 rounded-2xl bg-rose-50 text-rose-800 text-xs font-medium max-w-md mx-auto border border-rose-200 flex items-center gap-2 text-left">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-600" />
+                  <span className="leading-relaxed">{statusData.error}</span>
+                </div>
+              )}
 
               <div className="pt-1">
                 <button
