@@ -27,7 +27,7 @@ if (!INTERNAL_SECRET || !INTERNAL_SECRET.trim()) {
 
 const app = express();
 const PORT = process.env.PORT || 3005;
-const HOST = process.env.WHATSAPP_HOST || "127.0.0.1";
+const HOST = process.env.WHATSAPP_HOST || "0.0.0.0";
 
 // Middleware
 app.use(cors());
