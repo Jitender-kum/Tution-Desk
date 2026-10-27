@@ -62,11 +62,22 @@ export async function GET(request: NextRequest) {
     // 2. Alert for WhatsApp Microservice Status
     let isWhatsappConnected = false;
     try {
+      const whatsappServiceUrl =
+        process.env.WHATSAPP_SERVICE_URL || "http://localhost:3005";
+      const internalSecret = process.env.WHATSAPP_INTERNAL_SECRET;
+      const headers: Record<string, string> = {};
+      if (internalSecret && internalSecret.trim()) {
+        headers["x-internal-secret"] = internalSecret.trim();
+      }
+
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 1200);
       const waRes = await fetch(
-        `http://localhost:3005/status/${cleanCenterId}`,
-        { signal: controller.signal }
+        `${whatsappServiceUrl}/status/${encodeURIComponent(cleanCenterId)}`,
+        {
+          headers,
+          signal: controller.signal,
+        }
       );
       clearTimeout(timeoutId);
 
