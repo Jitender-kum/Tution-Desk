@@ -70,6 +70,7 @@ class BaileysProvider extends IWhatsAppProvider {
     this.makeSocketFn = options.makeSocketFn || null;
     this.customBaileys = options.baileysInstance || null;
     this.maxReconnectAttempts = options.maxReconnectAttempts || 5;
+    this.maxConsecutiveRestarts = options.maxConsecutiveRestarts || 3;
 
     // Silent pino logger to prevent logging raw frames, tokens, or QR strings
     this.logger = options.pinoLogger || pino({ level: 'silent' });
@@ -299,6 +300,8 @@ class BaileysProvider extends IWhatsAppProvider {
         reconnectAttempts: 0,
         reconnectTimer: null,
         generation: 0,
+        restartCount: 0,
+        lastCredsSavePromise: null,
       };
       this.sessions.set(cleanCenterId, sessionObj);
     }
@@ -340,7 +343,9 @@ class BaileysProvider extends IWhatsAppProvider {
     sock.ev.on('creds.update', async () => {
       if (sessionObj.generation !== currentGen) return;
       try {
-        await authState.saveCreds();
+        const savePromise = authState.saveCreds();
+        sessionObj.lastCredsSavePromise = savePromise;
+        await savePromise;
         this.savedSessionCenters.add(cleanCenterId);
       } catch (err) {
         console.warn(`[BaileysProvider] [Center: ${cleanCenterId}] Error persisting credentials:`, err.message);
@@ -370,6 +375,7 @@ class BaileysProvider extends IWhatsAppProvider {
         sessionObj.qrGeneratedAt = null;
         sessionObj.error = null;
         sessionObj.reconnectAttempts = 0;
+        sessionObj.restartCount = 0;
         sessionObj.updatedAt = new Date().toISOString();
         this.savedSessionCenters.add(cleanCenterId);
       }
@@ -388,14 +394,49 @@ class BaileysProvider extends IWhatsAppProvider {
         const isLoggedOut =
           statusCode === DisconnectReason?.loggedOut || statusCode === 401;
 
+        const isRestartRequired =
+          statusCode === DisconnectReason?.restartRequired || statusCode === 515;
+
         if (isLoggedOut) {
           sessionObj.status = 'disconnected';
           sessionObj.error = 'WhatsApp session logged out from device';
+          sessionObj.restartCount = 0;
           await this.destroySocketSafely(sessionObj);
           try {
             await authState.clearAuth();
             this.savedSessionCenters.delete(cleanCenterId);
           } catch {}
+        } else if (isRestartRequired) {
+          sessionObj.restartCount = (sessionObj.restartCount || 0) + 1;
+
+          if (sessionObj.restartCount <= this.maxConsecutiveRestarts) {
+            sessionObj.status = 'initializing';
+            sessionObj.error = null;
+
+            if (sessionObj.reconnectTimer) {
+              clearTimeout(sessionObj.reconnectTimer);
+              sessionObj.reconnectTimer = null;
+            }
+
+            sessionObj.reconnectTimer = setTimeout(async () => {
+              if (sessionObj.generation === currentGen) {
+                if (sessionObj.lastCredsSavePromise) {
+                  try {
+                    await sessionObj.lastCredsSavePromise;
+                  } catch {}
+                }
+                if (sessionObj.generation === currentGen) {
+                  this._spawnSocket(cleanCenterId).catch((err) => {
+                    console.warn(`[BaileysProvider] [Center: ${cleanCenterId}] Error restarting socket after 515:`, err.message);
+                  });
+                }
+              }
+            }, 0);
+          } else {
+            sessionObj.status = 'disconnected';
+            sessionObj.error = 'Maximum consecutive restarts exceeded';
+            await this.destroySocketSafely(sessionObj);
+          }
         } else {
           sessionObj.status = 'disconnected';
           sessionObj.error = error?.message || 'Connection closed';
@@ -404,6 +445,11 @@ class BaileysProvider extends IWhatsAppProvider {
           if (sessionObj.reconnectAttempts < this.maxReconnectAttempts) {
             sessionObj.reconnectAttempts++;
             const backoffMs = Math.min(1000 * Math.pow(2, sessionObj.reconnectAttempts - 1), 10000);
+
+            if (sessionObj.reconnectTimer) {
+              clearTimeout(sessionObj.reconnectTimer);
+              sessionObj.reconnectTimer = null;
+            }
 
             sessionObj.reconnectTimer = setTimeout(() => {
               if (sessionObj.generation === currentGen) {

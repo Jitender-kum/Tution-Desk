@@ -353,41 +353,217 @@ describe('BaileysProvider Test Suite (Phase 2C - Mocked)', () => {
   });
 
   /* ------------------------------------------------------------------
-   * Test 5: Socket Close & Reconnect Behavior [Mocked]
+   * Test 5: Socket Close & Reconnect Lifecycle [Mocked]
    * ------------------------------------------------------------------ */
-  it('5. Socket close triggers auto-reconnect on transient errors and purges session on logout 401 [Mocked]', async () => {
-    const provider = new BaileysProvider({
-      mongooseInstance: mockEnv.mockMongoose,
-      makeSocketFn,
-      maxReconnectAttempts: 2,
+  describe('5. Socket Close & Reconnect Lifecycle [Mocked]', () => {
+    it('5.1 DisconnectReason.restartRequired (515) triggers immediate socket restart without backoff or incrementing reconnectAttempts', async () => {
+      const provider = new BaileysProvider({
+        mongooseInstance: mockEnv.mockMongoose,
+        makeSocketFn,
+        maxReconnectAttempts: 2,
+      });
+
+      await provider.initializeSession('center-515');
+      assert.strictEqual(createdSockets.length, 1);
+      const mockSocket1 = createdSockets[0];
+
+      // Emit QR to reach qr_ready
+      mockSocket1.ev.emit('connection.update', {
+        qr: 'sample-qr-token',
+      });
+      let status = await provider.getStatus('center-515');
+      assert.strictEqual(status.status, 'qr_ready');
+      assert.strictEqual(status.qr, 'sample-qr-token');
+
+      // Trigger 515 (restartRequired)
+      mockSocket1.ev.emit('connection.update', {
+        connection: 'close',
+        lastDisconnect: { error: { output: { statusCode: 515 } } },
+      });
+
+      // Status during transition must be initializing (not disconnected or connected), ready: false, qr: null
+      const sessionObj = provider.sessions.get('center-515');
+      assert.strictEqual(sessionObj.status, 'initializing');
+      assert.strictEqual(sessionObj.isReady, false);
+      assert.strictEqual(sessionObj.qr, null);
+      assert.strictEqual(sessionObj.reconnectAttempts, 0, '515 must not increment reconnectAttempts');
+      assert.strictEqual(sessionObj.restartCount, 1);
+
+      // Wait a tick for setTimeout(..., 0) to execute replacement socket spawn
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      assert.strictEqual(createdSockets.length, 2, 'A new replacement socket must be spawned');
+      assert.strictEqual(mockSocket1.isEnded, true, 'Old socket must be safely ended');
+
+      // Replacement socket connects successfully
+      const mockSocket2 = createdSockets[1];
+      mockSocket2.ev.emit('connection.update', { connection: 'open' });
+
+      status = await provider.getStatus('center-515');
+      assert.strictEqual(status.status, 'connected');
+      assert.strictEqual(status.ready, true);
+      assert.strictEqual(sessionObj.restartCount, 0, 'restartCount must be reset on open connection');
+      assert.strictEqual(sessionObj.reconnectAttempts, 0);
     });
 
-    // Subtest A: Transient error triggers auto-reconnect
-    await provider.initializeSession('center-reconnect');
-    const mockSocket1 = createdSockets[0];
+    it('5.2 515 restart awaits in-flight creds.update before spawning replacement socket', async () => {
+      const provider = new BaileysProvider({
+        mongooseInstance: mockEnv.mockMongoose,
+        makeSocketFn,
+      });
 
-    mockSocket1.ev.emit('connection.update', {
-      connection: 'close',
-      lastDisconnect: { error: new Error('Simulated network drop') },
+      await provider.initializeSession('center-creds-515');
+      const mockSocket = createdSockets[0];
+
+      let credsPersisted = false;
+      const originalSaveCreds = provider.sessions.get('center-creds-515').authState.saveCreds;
+      provider.sessions.get('center-creds-515').authState.saveCreds = async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        credsPersisted = true;
+        return originalSaveCreds();
+      };
+
+      // Emit credentials update right before 515 close
+      mockSocket.ev.emit('creds.update', {});
+      mockSocket.ev.emit('connection.update', {
+        connection: 'close',
+        lastDisconnect: { error: { output: { statusCode: 515 } } },
+      });
+
+      // Immediately after close, credentials save is still pending
+      assert.strictEqual(credsPersisted, false);
+
+      // Wait for restart
+      await new Promise((resolve) => setTimeout(resolve, 80));
+
+      // Replacement socket has been spawned and creds was awaited
+      assert.strictEqual(credsPersisted, true);
+      assert.strictEqual(createdSockets.length, 2);
     });
 
-    let status = await provider.getStatus('center-reconnect');
-    assert.strictEqual(status.status, 'disconnected');
-    assert.strictEqual(status.ready, false);
+    it('5.3 Consecutive 515 restartRequired events are capped to prevent infinite loops', async () => {
+      const provider = new BaileysProvider({
+        mongooseInstance: mockEnv.mockMongoose,
+        makeSocketFn,
+        maxConsecutiveRestarts: 3,
+      });
 
-    // Subtest B: Explicit 401 (loggedOut) destroys socket and clears auth
-    await provider.initializeSession('center-401');
-    const mockSocket401 = createdSockets[createdSockets.length - 1];
+      await provider.initializeSession('center-loop');
+      assert.strictEqual(createdSockets.length, 1);
 
-    mockSocket401.ev.emit('connection.update', {
-      connection: 'close',
-      lastDisconnect: { error: { output: { statusCode: 401 } } },
+      // Restart 1 (count 1 <= 3)
+      createdSockets[0].ev.emit('connection.update', {
+        connection: 'close',
+        lastDisconnect: { error: { output: { statusCode: 515 } } },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      assert.strictEqual(createdSockets.length, 2);
+
+      // Restart 2 (count 2 <= 3)
+      createdSockets[1].ev.emit('connection.update', {
+        connection: 'close',
+        lastDisconnect: { error: { output: { statusCode: 515 } } },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      assert.strictEqual(createdSockets.length, 3);
+
+      // Restart 3 (count 3 <= 3)
+      createdSockets[2].ev.emit('connection.update', {
+        connection: 'close',
+        lastDisconnect: { error: { output: { statusCode: 515 } } },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      assert.strictEqual(createdSockets.length, 4);
+
+      // Restart 4 (count 4 > 3 -> maximum exceeded)
+      createdSockets[3].ev.emit('connection.update', {
+        connection: 'close',
+        lastDisconnect: { error: { output: { statusCode: 515 } } },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+
+      // No 5th socket spawned
+      assert.strictEqual(createdSockets.length, 4);
+      const status = await provider.getStatus('center-loop');
+      assert.strictEqual(status.status, 'disconnected');
+      assert.strictEqual(status.ready, false);
+      assert.strictEqual(status.error, 'Maximum consecutive restarts exceeded');
+      assert.strictEqual(status.hasClientProcess, false);
     });
 
-    const status401 = await provider.getStatus('center-401');
-    assert.strictEqual(status401.status, 'disconnected');
-    assert.strictEqual(status401.hasClientProcess, false);
-    assert.strictEqual(status401.hasSavedSession, false, 'Session must be purged on 401 logged out');
+    it('5.4 Normal QR timeout (408 timedOut) transitions to disconnected and triggers backoff reconnect', async () => {
+      const provider = new BaileysProvider({
+        mongooseInstance: mockEnv.mockMongoose,
+        makeSocketFn,
+        maxReconnectAttempts: 2,
+      });
+
+      await provider.initializeSession('center-408');
+      const mockSocket = createdSockets[0];
+      mockSocket.ev.emit('connection.update', { qr: 'timeout-qr' });
+
+      let status = await provider.getStatus('center-408');
+      assert.strictEqual(status.status, 'qr_ready');
+
+      // 408 timedOut disconnect
+      mockSocket.ev.emit('connection.update', {
+        connection: 'close',
+        lastDisconnect: { error: { output: { statusCode: 408 } } },
+      });
+
+      status = await provider.getStatus('center-408');
+      assert.strictEqual(status.status, 'disconnected');
+      assert.strictEqual(status.ready, false);
+      assert.strictEqual(status.qr, null);
+
+      const sessionObj = provider.sessions.get('center-408');
+      assert.strictEqual(sessionObj.reconnectAttempts, 1);
+    });
+
+    it('5.5 Logged out (401) immediately purges session and MongoDB auth and does not reconnect', async () => {
+      const provider = new BaileysProvider({
+        mongooseInstance: mockEnv.mockMongoose,
+        makeSocketFn,
+      });
+
+      await provider.initializeSession('center-401');
+      const mockSocket = createdSockets[0];
+
+      mockSocket.ev.emit('connection.update', {
+        connection: 'close',
+        lastDisconnect: { error: { output: { statusCode: 401 } } },
+      });
+
+      const status = await provider.getStatus('center-401');
+      assert.strictEqual(status.status, 'disconnected');
+      assert.strictEqual(status.ready, false);
+      assert.strictEqual(status.hasClientProcess, false);
+      assert.strictEqual(status.hasSavedSession, false, 'Session must be purged on 401 logged out');
+    });
+
+    it('5.6 Duplicate close events or rapid 515 signals do not spawn duplicate replacement sockets', async () => {
+      const provider = new BaileysProvider({
+        mongooseInstance: mockEnv.mockMongoose,
+        makeSocketFn,
+      });
+
+      await provider.initializeSession('center-duplicate');
+      const mockSocket = createdSockets[0];
+
+      // Emit 515 twice in rapid succession
+      mockSocket.ev.emit('connection.update', {
+        connection: 'close',
+        lastDisconnect: { error: { output: { statusCode: 515 } } },
+      });
+      mockSocket.ev.emit('connection.update', {
+        connection: 'close',
+        lastDisconnect: { error: { output: { statusCode: 515 } } },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      assert.strictEqual(createdSockets.length, 2, 'Exactly one replacement socket must be spawned');
+    });
   });
 
   /* ------------------------------------------------------------------

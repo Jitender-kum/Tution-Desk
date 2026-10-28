@@ -376,6 +376,64 @@ describe('Engine Selection & Guarded Integration Test Suite (Phase 3C)', () => {
       assert.strictEqual(data.success, true);
       assert.strictEqual(data.centerId, 'center-parity');
     });
+
+    it('2.7 GET /status/:centerId returns active QR payload and qr_ready status when QR is available', async () => {
+      baileysProvider.sessions.set('center-qr-active', {
+        centerId: 'center-qr-active',
+        sock: createMockBaileysSocket(),
+        status: 'qr_ready',
+        isReady: false,
+        qr: 'mock_baileys_qr_payload_string_xyz',
+        qrGeneratedAt: 1730118000000,
+        error: null,
+        updatedAt: new Date().toISOString(),
+      });
+
+      const res = await fetch(`${baseUrl}/status/center-qr-active`, {
+        headers: { 'x-internal-secret': internalSecret },
+      });
+      assert.strictEqual(res.status, 200);
+
+      const data = await res.json();
+      assert.strictEqual(data.success, true);
+      assert.strictEqual(data.centerId, 'center-qr-active');
+      assert.strictEqual(data.status, 'qr_ready');
+      assert.strictEqual(data.ready, false);
+      assert.strictEqual(data.qr, 'mock_baileys_qr_payload_string_xyz');
+      assert.strictEqual(typeof data.qrGeneratedAt, 'number');
+      assert.strictEqual(data.hasClientProcess, true);
+    });
+
+    it('2.8 Rejects unauthenticated GET /status/:centerId with 401 when missing secret header', async () => {
+      const res = await fetch(`${baseUrl}/status/center-qr-active`);
+      assert.strictEqual(res.status, 401);
+      const data = await res.json();
+      assert.strictEqual(data.success, false);
+      assert.match(data.error, /Missing internal service secret/);
+    });
+
+    it('2.9 Rejects unauthenticated GET /status/:centerId with 401 when secret header is invalid', async () => {
+      const res = await fetch(`${baseUrl}/status/center-qr-active`, {
+        headers: { 'x-internal-secret': 'invalid_secret_attempt' },
+      });
+      assert.strictEqual(res.status, 401);
+      const data = await res.json();
+      assert.strictEqual(data.success, false);
+      assert.match(data.error, /Invalid internal service secret/);
+    });
+
+    it('2.10 Returns 200 with qr: null when session is in disconnected or uninitialized state', async () => {
+      const res = await fetch(`${baseUrl}/status/center-no-qr`, {
+        headers: { 'x-internal-secret': internalSecret },
+      });
+      assert.strictEqual(res.status, 200);
+      const data = await res.json();
+      assert.strictEqual(data.success, true);
+      assert.strictEqual(data.centerId, 'center-no-qr');
+      assert.strictEqual(data.status, 'disconnected');
+      assert.strictEqual(data.ready, false);
+      assert.strictEqual(data.qr, null);
+    });
   });
 
   /* ------------------------------------------------------------------
