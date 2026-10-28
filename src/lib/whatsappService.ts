@@ -66,6 +66,9 @@ export interface SendWelcomeMessageResult {
   message: string;
   messageId?: string;
   simulated?: boolean;
+  accepted?: boolean;
+  delivered?: boolean;
+  error?: string;
 }
 
 /**
@@ -89,13 +92,17 @@ export async function sendWelcomeMessage(
   if (!isLiveDispatchEnabled()) {
     logSimulatedDispatch("welcome_message", centerId, phone, message);
     return {
-      success: true,
+      success: false,
+      simulated: true,
+      accepted: false,
+      delivered: false,
       centerId,
       phone,
       magicLink,
       message,
       messageId: `sim_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      simulated: true,
+      error:
+        "Simulation mode active: outbound live WhatsApp dispatch disabled. Set WHATSAPP_MODE=live and ENABLE_LIVE_WHATSAPP=true to enable live delivery.",
     };
   }
 
@@ -118,6 +125,9 @@ export async function sendWelcomeMessage(
       );
       return {
         success: true,
+        simulated: false,
+        accepted: true,
+        delivered: false,
         centerId,
         phone,
         magicLink,
@@ -125,35 +135,49 @@ export async function sendWelcomeMessage(
         messageId: data.messageId,
       };
     } else {
+      const errorMsg =
+        data?.error || `Microservice returned HTTP ${response.status}`;
       console.warn(
-        `[WHATSAPP SERVICE] [Center: ${centerId}] Microservice status ${response.status}: ${
-          data?.error || "Client not connected or awaiting QR scan."
-        }`
+        `[WHATSAPP SERVICE] [Center: ${centerId}] Microservice send failed (${response.status}): ${errorMsg}`
       );
+      return {
+        success: false,
+        simulated: false,
+        accepted: false,
+        delivered: false,
+        centerId,
+        phone,
+        magicLink,
+        message,
+        error: errorMsg,
+      };
     }
   } catch (err: unknown) {
+    const errorMsg =
+      err instanceof Error ? err.message : "WhatsApp microservice unreachable";
     console.warn(
-      `[WHATSAPP SERVICE OFFLINE] Microservice at ${WHATSAPP_SERVICE_URL} is unreachable. Falling back to simulated log.`,
-      err instanceof Error ? err.message : err
+      `[WHATSAPP SERVICE ERROR] Microservice at ${WHATSAPP_SERVICE_URL} unreachable for welcome message: ${errorMsg}`
     );
+    return {
+      success: false,
+      simulated: false,
+      accepted: false,
+      delivered: false,
+      centerId,
+      phone,
+      magicLink,
+      message,
+      error: errorMsg,
+    };
   }
-
-  // Graceful offline fallback simulation log (sanitized)
-  logSimulatedDispatch("welcome_message_offline_fallback", centerId, phone, message);
-
-  return {
-    success: true,
-    centerId,
-    phone,
-    magicLink,
-    message,
-    simulated: true,
-  };
 }
 
 export interface SendCustomMessageResult {
   success: boolean;
   simulated?: boolean;
+  accepted?: boolean;
+  delivered?: boolean;
+  messageId?: string;
   error?: string;
 }
 
@@ -169,8 +193,12 @@ export async function sendCustomWhatsAppMessage(
   if (!isLiveDispatchEnabled()) {
     logSimulatedDispatch("custom_message", centerId, phone, message);
     return {
-      success: true,
+      success: false,
       simulated: true,
+      accepted: false,
+      delivered: false,
+      error:
+        "Simulation mode active: outbound live WhatsApp dispatch disabled. Set WHATSAPP_MODE=live and ENABLE_LIVE_WHATSAPP=true to enable live delivery.",
     };
   }
 
@@ -182,13 +210,28 @@ export async function sendCustomWhatsAppMessage(
     });
 
     const data = await response.json().catch(() => null);
+    if (response.ok && data?.success) {
+      return {
+        success: true,
+        simulated: false,
+        accepted: true,
+        delivered: false,
+        messageId: data.messageId,
+      };
+    }
     return {
-      success: response.ok && Boolean(data?.success),
-      error: data?.error,
+      success: false,
+      simulated: false,
+      accepted: false,
+      delivered: false,
+      error: data?.error || `Microservice returned HTTP ${response.status}`,
     };
   } catch (err: unknown) {
     return {
       success: false,
+      simulated: false,
+      accepted: false,
+      delivered: false,
       error:
         err instanceof Error ? err.message : "WhatsApp microservice unreachable",
     };
@@ -202,6 +245,8 @@ export interface SendFeeReminderResult {
   message: string;
   messageId?: string;
   simulated?: boolean;
+  accepted?: boolean;
+  delivered?: boolean;
   error?: string;
 }
 
@@ -228,12 +273,16 @@ export async function sendFeeReminder(
   if (!isLiveDispatchEnabled()) {
     logSimulatedDispatch("fee_reminder", centerId, phone, message);
     return {
-      success: true,
+      success: false,
+      simulated: true,
+      accepted: false,
+      delivered: false,
       centerId,
       phone,
       message,
       messageId: `sim_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      simulated: true,
+      error:
+        "Simulation mode active: outbound live WhatsApp dispatch disabled. Set WHATSAPP_MODE=live and ENABLE_LIVE_WHATSAPP=true to enable live delivery.",
     };
   }
 
@@ -252,35 +301,48 @@ export async function sendFeeReminder(
       );
       return {
         success: true,
+        simulated: false,
+        accepted: true,
+        delivered: false,
         centerId,
         phone,
         message,
         messageId: data.messageId,
       };
     } else {
+      const errorMsg =
+        data?.error || `Microservice returned HTTP ${response.status}`;
       console.warn(
-        `[WHATSAPP SERVICE] [Center: ${centerId}] Microservice returned status ${response.status}: ${
-          data?.error || "Client not connected or awaiting QR scan."
-        }`
+        `[WHATSAPP SERVICE] [Center: ${centerId}] Fee reminder failed (${response.status}): ${errorMsg}`
       );
+      return {
+        success: false,
+        simulated: false,
+        accepted: false,
+        delivered: false,
+        centerId,
+        phone,
+        message,
+        error: errorMsg,
+      };
     }
   } catch (err: unknown) {
+    const errorMsg =
+      err instanceof Error ? err.message : "WhatsApp microservice unreachable";
     console.warn(
-      `[WHATSAPP SERVICE OFFLINE] Microservice at ${WHATSAPP_SERVICE_URL} unreachable for fee reminder. Falling back to simulated log.`,
-      err instanceof Error ? err.message : err
+      `[WHATSAPP SERVICE ERROR] Microservice at ${WHATSAPP_SERVICE_URL} unreachable for fee reminder: ${errorMsg}`
     );
+    return {
+      success: false,
+      simulated: false,
+      accepted: false,
+      delivered: false,
+      centerId,
+      phone,
+      message,
+      error: errorMsg,
+    };
   }
-
-  // Fallback simulation log (sanitized)
-  logSimulatedDispatch("fee_reminder_offline_fallback", centerId, phone, message);
-
-  return {
-    success: true,
-    centerId,
-    phone,
-    message,
-    simulated: true,
-  };
 }
 
 export interface SendTestResultResult {
@@ -290,6 +352,8 @@ export interface SendTestResultResult {
   message: string;
   messageId?: string;
   simulated?: boolean;
+  accepted?: boolean;
+  delivered?: boolean;
   error?: string;
 }
 
@@ -322,12 +386,16 @@ export async function sendTestResult(
   if (!isLiveDispatchEnabled()) {
     logSimulatedDispatch("test_result", centerId, phone, message);
     return {
-      success: true,
+      success: false,
+      simulated: true,
+      accepted: false,
+      delivered: false,
       centerId,
       phone,
       message,
       messageId: `sim_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      simulated: true,
+      error:
+        "Simulation mode active: outbound live WhatsApp dispatch disabled. Set WHATSAPP_MODE=live and ENABLE_LIVE_WHATSAPP=true to enable live delivery.",
     };
   }
 
@@ -346,33 +414,46 @@ export async function sendTestResult(
       );
       return {
         success: true,
+        simulated: false,
+        accepted: true,
+        delivered: false,
         centerId,
         phone,
         message,
         messageId: data.messageId,
       };
     } else {
+      const errorMsg =
+        data?.error || `Microservice returned HTTP ${response.status}`;
       console.warn(
-        `[WHATSAPP SERVICE] [Center: ${centerId}] Microservice returned status ${response.status}: ${
-          data?.error || "Client not connected or awaiting QR scan."
-        }`
+        `[WHATSAPP SERVICE] [Center: ${centerId}] Test result failed (${response.status}): ${errorMsg}`
       );
+      return {
+        success: false,
+        simulated: false,
+        accepted: false,
+        delivered: false,
+        centerId,
+        phone,
+        message,
+        error: errorMsg,
+      };
     }
   } catch (err: unknown) {
+    const errorMsg =
+      err instanceof Error ? err.message : "WhatsApp microservice unreachable";
     console.warn(
-      `[WHATSAPP SERVICE OFFLINE] Microservice at ${WHATSAPP_SERVICE_URL} unreachable for test result. Falling back to simulated log.`,
-      err instanceof Error ? err.message : err
+      `[WHATSAPP SERVICE ERROR] Microservice at ${WHATSAPP_SERVICE_URL} unreachable for test result: ${errorMsg}`
     );
+    return {
+      success: false,
+      simulated: false,
+      accepted: false,
+      delivered: false,
+      centerId,
+      phone,
+      message,
+      error: errorMsg,
+    };
   }
-
-  // Fallback simulation log (sanitized)
-  logSimulatedDispatch("test_result_offline_fallback", centerId, phone, message);
-
-  return {
-    success: true,
-    centerId,
-    phone,
-    message,
-    simulated: true,
-  };
 }

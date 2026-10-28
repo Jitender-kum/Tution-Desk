@@ -60,10 +60,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       simulated: true,
+      accepted: false,
+      delivered: false,
       centerId,
       messageId: `sim_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       message:
-        "Simulation mode active: WhatsApp test ping simulated successfully (zero outbound network requests).",
+        "Simulation mode active: WhatsApp outbound dispatch is simulated (zero outbound network requests). Configure WHATSAPP_MODE=live and ENABLE_LIVE_WHATSAPP=true to enable live message delivery.",
     });
   }
 

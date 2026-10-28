@@ -326,6 +326,10 @@ class BaileysProvider extends IWhatsAppProvider {
     const baileys = await getBaileys(this.customBaileys);
     const { DisconnectReason } = baileys;
     const makeSocket = this.makeSocketFn || baileys.makeWASocket || baileys.default;
+    const makeCacheableSignalKeyStore =
+      typeof baileys.makeCacheableSignalKeyStore === 'function'
+        ? baileys.makeCacheableSignalKeyStore
+        : (keys) => keys;
 
     if (typeof makeSocket !== 'function') {
       throw new Error('Baileys makeWASocket factory not available.');
@@ -336,7 +340,10 @@ class BaileysProvider extends IWhatsAppProvider {
     sessionObj.authState = authState;
 
     const sock = makeSocket({
-      auth: authState.state,
+      auth: {
+        creds: authState.state.creds,
+        keys: makeCacheableSignalKeyStore(authState.state.keys, this.logger),
+      },
       logger: this.logger,
       printQRInTerminal: false,
     });
@@ -603,7 +610,37 @@ class BaileysProvider extends IWhatsAppProvider {
       throw new ValidationError('centerId is required in request body to route message to correct WhatsApp session.');
     }
 
-    const session = this.sessions.get(targetCenterId);
+    let session = this.sessions.get(targetCenterId);
+
+    // Auto-rehydrate saved session from MongoDB if socket is not in memory
+    if (
+      (!session || !session.sock) &&
+      (this.savedSessionCenters.has(targetCenterId) ||
+        (this.isMongoConnected && (await this.authStore.sessionExists(targetCenterId))))
+    ) {
+      try {
+        await this.initializeSession(targetCenterId);
+        session = this.sessions.get(targetCenterId);
+      } catch (rehydrateErr) {
+        console.warn(
+          `[BaileysProvider] [Center: ${targetCenterId}] Auto-rehydration notice:`,
+          rehydrateErr.message
+        );
+      }
+    }
+
+    // Brief readiness wait if session is actively initializing or authenticating
+    if (
+      session &&
+      !session.isReady &&
+      (session.status === 'initializing' || session.status === 'authenticated')
+    ) {
+      const waitStart = Date.now();
+      while (!session.isReady && Date.now() - waitStart < 3000) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+    }
+
     if (!session || !session.isReady || !session.sock) {
       throw new ServiceUnavailableError(
         `WhatsApp Client for center '${targetCenterId}' is not ready. Please scan the QR code in Settings.`
@@ -642,6 +679,9 @@ class BaileysProvider extends IWhatsAppProvider {
       messageId: response?.key?.id || response?.id || 'sent',
       recipient: formattedJid,
       timestamp: new Date().toISOString(),
+      accepted: true,
+      delivered: false,
+      status: 'accepted',
     };
   }
 

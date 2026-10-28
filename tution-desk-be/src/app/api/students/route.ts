@@ -74,11 +74,27 @@ export async function POST(request: NextRequest) {
         newStudent.parentWhatsApp,
         customMessage,
         newStudent._id.toString()
-      ).catch((whatsappErr) => {
-        console.error("Async WhatsApp Welcome Error:", whatsappErr);
-      });
+      )
+        .then((result) => {
+          if (result.simulated) {
+            console.log(
+              `[ADMISSION NOTIFICATION SIMULATED] Student: ${newStudent.name} (${newStudent._id}) | Center: ${newStudent.centerId} | Simulation mode active.`
+            );
+          } else if (result.success) {
+            console.log(
+              `[ADMISSION NOTIFICATION DISPATCHED] Student: ${newStudent.name} (${newStudent._id}) | Center: ${newStudent.centerId} | Provider accepted ID: ${result.messageId}`
+            );
+          } else {
+            console.warn(
+              `[ADMISSION NOTIFICATION FAILED] Student: ${newStudent.name} (${newStudent._id}) | Center: ${newStudent.centerId} | Error: ${result.error || "Unknown send failure"}`
+            );
+          }
+        })
+        .catch((whatsappErr) => {
+          console.error("Async WhatsApp Welcome Error:", whatsappErr);
+        });
     } catch (dispatchErr) {
-      console.error("Failed to dispatch WhatsApp Welcome Message:", dispatchErr);
+      console.error("Failed to initiate WhatsApp Welcome Message:", dispatchErr);
     }
 
     return NextResponse.json(

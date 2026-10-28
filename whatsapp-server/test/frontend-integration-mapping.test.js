@@ -154,4 +154,93 @@ describe('Frontend WhatsApp Integration & Status Mapping Test Suite', () => {
     assert.strictEqual('secret' in frontendState, false);
     assert.strictEqual(JSON.stringify(frontendState).includes('secret'), false);
   });
+
+  /**
+   * Replicates isLiveDispatchEnabled from src/lib/whatsappService.ts
+   */
+  function isLiveDispatchEnabled(env) {
+    const mode = env.WHATSAPP_MODE?.trim().toLowerCase();
+    const liveOptIn = env.ENABLE_LIVE_WHATSAPP?.trim().toLowerCase();
+    return mode === 'live' && liveOptIn === 'true';
+  }
+
+  it('7. Simulation guard strictly requires BOTH WHATSAPP_MODE=live AND ENABLE_LIVE_WHATSAPP=true', () => {
+    // Both missing
+    assert.strictEqual(isLiveDispatchEnabled({}), false);
+    // NODE_ENV=production alone is NOT sufficient
+    assert.strictEqual(isLiveDispatchEnabled({ NODE_ENV: 'production' }), false);
+    // Only WHATSAPP_MODE=live
+    assert.strictEqual(isLiveDispatchEnabled({ WHATSAPP_MODE: 'live' }), false);
+    // Only ENABLE_LIVE_WHATSAPP=true
+    assert.strictEqual(isLiveDispatchEnabled({ ENABLE_LIVE_WHATSAPP: 'true' }), false);
+    // WHATSAPP_MODE=live but ENABLE_LIVE_WHATSAPP=false
+    assert.strictEqual(isLiveDispatchEnabled({ WHATSAPP_MODE: 'live', ENABLE_LIVE_WHATSAPP: 'false' }), false);
+    // Both present with matching values
+    assert.strictEqual(isLiveDispatchEnabled({ WHATSAPP_MODE: 'live', ENABLE_LIVE_WHATSAPP: 'true' }), true);
+    // Handles whitespace and casing safely
+    assert.strictEqual(isLiveDispatchEnabled({ WHATSAPP_MODE: ' LIVE ', ENABLE_LIVE_WHATSAPP: ' True ' }), true);
+  });
+
+  /**
+   * Replicates handleSendTestMessage UI result mapping from src/app/settings/page.tsx
+   */
+  function mapTestMessageResult(resOk, data, phone) {
+    if (data?.simulated) {
+      return {
+        type: 'warning',
+        message: '⚠️ Simulation Mode: Message was simulated (not sent to WhatsApp). Set WHATSAPP_MODE=live and ENABLE_LIVE_WHATSAPP=true in production environment variables to enable live delivery.',
+      };
+    } else if (resOk && data?.success) {
+      return {
+        type: 'success',
+        message: `✅ Message accepted by WhatsApp network! Message ID: ${data.messageId || 'accepted'}.`,
+      };
+    } else {
+      return {
+        type: 'error',
+        message: data?.error || 'Failed to send test message. Check if WhatsApp is linked and ready.',
+      };
+    }
+  }
+
+  it('8. UI test-message handler maps simulated response to warning, never false success', () => {
+    const simulatedResponse = {
+      success: true,
+      simulated: true,
+      message: '[SIMULATION] Test message recorded',
+      accepted: false,
+      delivered: false,
+    };
+
+    const uiResult = mapTestMessageResult(true, simulatedResponse, '9876543210');
+    assert.strictEqual(uiResult.type, 'warning');
+    assert.match(uiResult.message, /Simulation Mode/);
+    assert.doesNotMatch(uiResult.message, /✅/);
+  });
+
+  it('9. UI test-message handler maps real provider send to success with accepted semantics', () => {
+    const liveResponse = {
+      success: true,
+      simulated: false,
+      accepted: true,
+      delivered: false,
+      messageId: 'BAILEYS_12345',
+    };
+
+    const uiResult = mapTestMessageResult(true, liveResponse, '9876543210');
+    assert.strictEqual(uiResult.type, 'success');
+    assert.match(uiResult.message, /accepted by WhatsApp network/);
+    assert.match(uiResult.message, /BAILEYS_12345/);
+  });
+
+  it('10. UI test-message handler maps microservice failure to error with actionable message', () => {
+    const failureResponse = {
+      success: false,
+      error: "WhatsApp Client for center 'center-test' is not ready. Please scan the QR code in Settings.",
+    };
+
+    const uiResult = mapTestMessageResult(false, failureResponse, '9876543210');
+    assert.strictEqual(uiResult.type, 'error');
+    assert.match(uiResult.message, /not ready/);
+  });
 });

@@ -45,6 +45,7 @@ export async function POST(request: NextRequest) {
       "http://localhost:3000";
 
     let sentCount = 0;
+    let simulatedCount = 0;
     const dispatchResults = [];
 
     // Loop through the pending fees and call sendFeeReminder
@@ -75,8 +76,10 @@ export async function POST(request: NextRequest) {
             magicLink
           );
 
-          if (res.success) {
+          if (res.success && !res.simulated) {
             sentCount++;
+          } else if (res.simulated) {
+            simulatedCount++;
           }
 
           dispatchResults.push({
@@ -85,6 +88,9 @@ export async function POST(request: NextRequest) {
             phone: parentPhone,
             success: res.success,
             simulated: res.simulated,
+            accepted: res.accepted,
+            delivered: res.delivered,
+            error: res.error,
           });
         } catch (err) {
           console.error(
@@ -99,6 +105,7 @@ export async function POST(request: NextRequest) {
       {
         success: true,
         sentCount,
+        simulatedCount,
         totalPending: pendingFees.length,
         results: dispatchResults,
       },

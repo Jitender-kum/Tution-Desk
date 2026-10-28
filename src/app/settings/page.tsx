@@ -109,7 +109,7 @@ export default function SettingsPage() {
   const [testPhone, setTestPhone] = useState("");
   const [testSending, setTestSending] = useState(false);
   const [testResult, setTestResult] = useState<{
-    type: "success" | "error";
+    type: "success" | "error" | "warning";
     message: string;
   } | null>(null);
 
@@ -637,10 +637,15 @@ export default function SettingsPage() {
 
       const data = await res.json().catch(() => null);
 
-      if (res.ok && data?.success) {
+      if (data?.simulated) {
+        setTestResult({
+          type: "warning",
+          message: `⚠️ Simulation Mode: Message was simulated (not sent to WhatsApp). Set WHATSAPP_MODE=live and ENABLE_LIVE_WHATSAPP=true in production environment variables to enable live delivery.`,
+        });
+      } else if (res.ok && data?.success) {
         setTestResult({
           type: "success",
-          message: `✅ Test ping sent successfully to +91 ${testPhone}!`,
+          message: `✅ Message accepted by WhatsApp network! Message ID: ${data.messageId || "accepted"}.`,
         });
         setTestPhone("");
       } else {
@@ -648,7 +653,7 @@ export default function SettingsPage() {
           type: "error",
           message:
             data?.error ||
-            "Failed to send test message. Check if WhatsApp is linked.",
+            "Failed to send test message. Check if WhatsApp is linked and ready.",
         });
       }
     } catch (err: unknown) {
@@ -987,11 +992,15 @@ export default function SettingsPage() {
                 className={`p-3.5 rounded-2xl text-xs flex items-center gap-2.5 animate-fade-in ${
                   testResult.type === "success"
                     ? "bg-emerald-50 text-emerald-900 border border-emerald-200"
+                    : testResult.type === "warning"
+                    ? "bg-amber-50 text-amber-900 border border-amber-200"
                     : "bg-rose-50 text-rose-900 border border-rose-200"
                 }`}
               >
                 {testResult.type === "success" ? (
                   <CheckCircle2 className="w-4 h-4 flex-shrink-0 text-emerald-600" />
+                ) : testResult.type === "warning" ? (
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 text-amber-600" />
                 ) : (
                   <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-600" />
                 )}
