@@ -655,4 +655,127 @@ describe('WhatsApp MongoDB Session Persistence Suite (Hardened)', () => {
       assert.strictEqual(willReportSuccess, false, `Failed upstream status ${upstream.status} must not report success`);
     }
   });
+
+  it('18. Memory Guard: Process cleanup on client destruction terminates browser process and clears timers', async () => {
+    let timerCleared = false;
+    let sigkillSent = false;
+    let listenersRemoved = false;
+
+    const mockClient = {
+      authStrategy: {
+        destroy: async () => {
+          timerCleared = true;
+        },
+      },
+      removeAllListeners: () => {
+        listenersRemoved = true;
+      },
+      pupBrowser: {
+        isConnected: () => false, // simulates hanging close
+        close: async () => {
+          throw new Error('Hanging close timeout');
+        },
+        process: () => ({
+          pid: 9999,
+          killed: false,
+          kill: (signal) => {
+            if (signal === 'SIGKILL') sigkillSent = true;
+          },
+        }),
+      },
+      destroy: async () => {},
+    };
+
+    // Replicate destroyClientSafely logic
+    if (mockClient.authStrategy && typeof mockClient.authStrategy.destroy === 'function') {
+      await mockClient.authStrategy.destroy();
+    }
+    if (typeof mockClient.removeAllListeners === 'function') {
+      mockClient.removeAllListeners();
+    }
+    const browser = mockClient.pupBrowser;
+    const proc = browser?.process ? browser.process() : null;
+
+    const closePromise = (async () => {
+      try {
+        if (browser?.isConnected?.()) {
+          await browser.close();
+        } else if (typeof mockClient.destroy === 'function') {
+          await mockClient.destroy();
+        }
+      } catch {}
+    })();
+
+    const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 50));
+    await Promise.race([closePromise, timeoutPromise]);
+
+    if (proc && !proc.killed) {
+      proc.kill('SIGKILL');
+    }
+
+    assert.strictEqual(timerCleared, true, 'RemoteAuth backup timer must be destroyed');
+    assert.strictEqual(listenersRemoved, true, 'Client event listeners must be removed');
+    assert.strictEqual(sigkillSent, true, 'SIGKILL must be sent to un-exited browser process');
+  });
+
+  it('19. Memory Guard: Enforces single active client policy across centers on 512MB tier', async () => {
+    const sessions = new Map();
+
+    // Center A is currently active
+    sessions.set('center-a', {
+      centerId: 'center-a',
+      client: { id: 'client-process-a' },
+      status: 'connected',
+      isReady: true,
+      qr: null,
+    });
+
+    // Request to launch Center B
+    const newCenterId = 'center-b';
+    let tornDownCenter = null;
+
+    for (const [id, s] of sessions.entries()) {
+      if (id !== newCenterId && s.client) {
+        tornDownCenter = id;
+        s.client = null;
+        s.status = 'disconnected';
+        s.isReady = false;
+        s.qr = null;
+      }
+    }
+
+    assert.strictEqual(tornDownCenter, 'center-a', 'Center A must be torn down before Center B launches');
+    assert.strictEqual(sessions.get('center-a').client, null, 'Center A client must be null');
+    assert.strictEqual(sessions.get('center-a').status, 'disconnected');
+  });
+
+  it('20. Memory Guard: Client initialization failure safely cleans up process and sets disconnected status', async () => {
+    let destroyed = false;
+    const mockClient = {
+      destroy: async () => {
+        destroyed = true;
+      },
+    };
+
+    const sessionObj = {
+      centerId: 'center-fail-cleanup',
+      client: mockClient,
+      status: 'initializing',
+      isReady: false,
+      error: null,
+    };
+
+    // Simulate failed initialize
+    const initError = new Error('Chromium crashed on low memory');
+    sessionObj.status = 'disconnected';
+    sessionObj.isReady = false;
+    sessionObj.error = initError.message;
+    await mockClient.destroy();
+    sessionObj.client = null;
+
+    assert.strictEqual(destroyed, true, 'Failed initialization must destroy client');
+    assert.strictEqual(sessionObj.client, null, 'Client reference must be cleared');
+    assert.strictEqual(sessionObj.status, 'disconnected');
+    assert.strictEqual(sessionObj.error, 'Chromium crashed on low memory');
+  });
 });

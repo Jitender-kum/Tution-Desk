@@ -63,8 +63,8 @@ async function migrateLocalSessionToRemote({ centerId, store, dataPath }) {
       }
     }
 
-    // Create zip archive with root directory 'Default' (exact format expected by RemoteAuth)
-    const archive = archiver('zip', { zlib: { level: 9 } });
+    // Create zip archive with root directory 'Default' using level 1 to minimize memory usage
+    const archive = archiver('zip', { zlib: { level: 1 } });
     const output = fs.createWriteStream(tempZipPath);
 
     await new Promise((resolve, reject) => {
