@@ -209,6 +209,8 @@ function createApp(activeProvider = provider) {
         ready: statusObj.ready,
         ...(statusObj.hasClientProcess !== undefined ? { hasClientProcess: statusObj.hasClientProcess } : {}),
         service: 'WhatsApp Multi-Tenant Automation Microservice',
+        ...(statusObj.engine ? { engine: statusObj.engine } : {}),
+        ...(statusObj.persistence ? { persistence: statusObj.persistence } : {}),
         ...(statusObj.updatedAt ? { updatedAt: statusObj.updatedAt } : {}),
         timestamp: new Date().toISOString(),
       });

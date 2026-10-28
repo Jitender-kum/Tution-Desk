@@ -45,6 +45,12 @@ interface MicroserviceStatus {
   service?: string;
   timestamp?: string;
   error?: string;
+  engine?: string;
+  persistence?: {
+    mode?: string;
+    status?: string;
+    durable?: boolean;
+  } | string;
 }
 
 export default function SettingsPage() {
@@ -327,6 +333,8 @@ export default function SettingsPage() {
           service: data?.service,
           timestamp: data?.timestamp,
           error: data?.error || undefined,
+          engine: data?.engine,
+          persistence: data?.persistence,
         };
 
         setStatusData(newStatus);
@@ -843,7 +851,11 @@ export default function SettingsPage() {
                 </span>
                 <span className="text-xs font-bold text-slate-800 flex items-center gap-1 mt-1 truncate">
                   <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" />
-                  LocalAuth Isolated
+                  {statusData.engine?.includes("baileys")
+                    ? "Baileys (MongoDB Atlas)"
+                    : statusData.hasSavedSession
+                    ? "MongoDB RemoteAuth"
+                    : "LocalAuth Isolated"}
                 </span>
               </div>
               <div className="bg-white/90 backdrop-blur-xs p-3 rounded-2xl border border-emerald-100 shadow-2xs">
@@ -856,10 +868,14 @@ export default function SettingsPage() {
               </div>
               <div className="bg-white/90 backdrop-blur-xs p-3 rounded-2xl border border-emerald-100 shadow-2xs">
                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                  Microservice Port
+                  Gateway
                 </span>
-                <span className="text-xs font-bold text-slate-800 mt-1 font-mono block">
-                  :3005
+                <span className="text-xs font-bold text-slate-800 mt-1 font-mono block truncate">
+                  {statusData.engine?.includes("baileys")
+                    ? "WebSocket Native (~30MB)"
+                    : isLocalEnv
+                    ? "Port :3005"
+                    : "Puppeteer (Chromium)"}
                 </span>
               </div>
               <div className="bg-white/90 backdrop-blur-xs p-3 rounded-2xl border border-emerald-100 shadow-2xs">
@@ -988,127 +1004,7 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* 2. QR READY STATE - USER SCANS QR CODE IN UI */}
-      {isQrReady && statusData.qr && (
-        <div className="glass-card p-7 rounded-3xl border border-amber-200/80 shadow-md bg-gradient-to-b from-amber-50/40 via-white to-white space-y-6">
-          <div className="text-center max-w-md mx-auto space-y-1.5">
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 text-amber-800 text-xs font-bold">
-              <QrCode className="w-3.5 h-3.5" />
-              Pair Center: {centerId}
-            </div>
-            <h3 className="text-xl font-black text-slate-900 tracking-tight">
-              Scan QR Code to Connect WhatsApp
-            </h3>
-            <p className="text-xs text-slate-500">
-              Point your phone’s camera at this QR code to connect your
-              coaching center’s WhatsApp number.
-            </p>
-          </div>
 
-          {/* QR Code Presentation */}
-          <div className="flex flex-col items-center justify-center">
-            <div className="p-6 bg-white rounded-3xl shadow-lg shadow-slate-200/60 border-2 border-slate-200/80 relative">
-              <QRCodeSVG
-                value={statusData.qr}
-                size={240}
-                level="M"
-                includeMargin={true}
-              />
-              <div className="mt-3 flex flex-col items-center justify-center gap-1 text-[11px] text-slate-500 font-semibold">
-                <div className="flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
-                  <span>
-                    Live QR Code
-                    {statusData.qrGeneratedAt && (
-                      <span className="text-slate-400 font-normal">
-                        {" "}• Generated{" "}
-                        {Math.max(
-                          0,
-                          Math.floor(
-                            (currentTime - statusData.qrGeneratedAt) / 1000
-                          )
-                        ) < 5
-                          ? "just now"
-                          : `${Math.max(
-                              0,
-                              Math.floor(
-                                (currentTime - statusData.qrGeneratedAt) / 1000
-                              )
-                            )}s ago`}
-                      </span>
-                    )}
-                  </span>
-                </div>
-                {statusData.qrGeneratedAt &&
-                  Math.floor(
-                    (currentTime - statusData.qrGeneratedAt) / 1000
-                  ) > 50 && (
-                    <span className="text-[10px] text-amber-700 font-medium bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200/80">
-                      If scanning shows &quot;Could not link&quot;, click Regenerate below.
-                    </span>
-                  )}
-              </div>
-            </div>
-          </div>
-
-          {/* Step-by-Step Instructions */}
-          <div className="bg-slate-50 rounded-2xl p-5 border border-slate-200/80 space-y-3 max-w-md mx-auto">
-            <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-              <Smartphone className="w-4 h-4 text-blue-600" />
-              How to Link:
-            </h4>
-            <ol className="text-xs text-slate-600 space-y-2 list-decimal list-inside pl-1 leading-relaxed">
-              <li>
-                Open <strong className="text-slate-800">WhatsApp</strong> on
-                your phone.
-              </li>
-              <li>
-                Tap <strong className="text-slate-800">Settings</strong> (iOS)
-                or the <strong className="text-slate-800">Three Dots</strong>{" "}
-                (Android).
-              </li>
-              <li>
-                Select{" "}
-                <strong className="text-slate-800">Linked Devices</strong>, then
-                tap{" "}
-                <strong className="text-slate-800">Link a Device</strong>.
-              </li>
-              <li>Point your camera at this QR code to complete pairing.</li>
-            </ol>
-          </div>
-
-          {/* Action Buttons: Regenerate QR Code & Cancel */}
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
-            <button
-              type="button"
-              onClick={() => handleRegenerateQR("refresh")}
-              disabled={isRegenerating || isInitializing}
-              className="tap-bounce inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-2xl bg-amber-600 hover:bg-amber-700 active:scale-[0.98] text-white text-xs font-bold transition-all shadow-md shadow-amber-500/20 disabled:opacity-50 cursor-pointer"
-            >
-              <RefreshCw
-                className={`w-3.5 h-3.5 ${
-                  isRegenerating ? "animate-spin" : ""
-                }`}
-              />
-              <span>
-                {isRegenerating
-                  ? "Regenerating QR Code..."
-                  : "Regenerate QR Code"}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handleCancelQR}
-              disabled={isRegenerating}
-              className="tap-bounce inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-800 text-xs font-bold transition-all disabled:opacity-50 cursor-pointer"
-            >
-              <X className="w-3.5 h-3.5" />
-              <span>Cancel</span>
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* 2. AUTHENTICATED / FINALIZING STATE */}
       {!isConnected && isAuthenticated && (

@@ -211,6 +211,8 @@ class BaileysProvider extends IWhatsAppProvider {
         qr: null,
         qrGeneratedAt: null,
         ready: false,
+        engine: this.name,
+        persistence: this.persistenceMode,
       };
     }
 
@@ -224,6 +226,8 @@ class BaileysProvider extends IWhatsAppProvider {
       hasClientProcess: Boolean(session.sock),
       error: session.error || null,
       updatedAt: session.updatedAt,
+      engine: this.name,
+      persistence: this.persistenceMode,
     };
   }
 

@@ -257,6 +257,8 @@ class WWebJSProvider extends IWhatsAppProvider {
         qr: null,
         qrGeneratedAt: null,
         ready: false,
+        engine: this.name,
+        persistence: this.persistenceMode,
       };
     }
 
@@ -270,6 +272,8 @@ class WWebJSProvider extends IWhatsAppProvider {
       hasClientProcess: Boolean(session.client),
       error: session.error || null,
       updatedAt: session.updatedAt,
+      engine: this.name,
+      persistence: this.persistenceMode,
     };
   }
 
