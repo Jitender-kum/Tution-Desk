@@ -4,7 +4,10 @@ const qrcode = require("qrcode-terminal");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const { Client, LocalAuth } = require("whatsapp-web.js");
+const { Client, RemoteAuth, LocalAuth } = require("whatsapp-web.js");
+const mongoose = require("mongoose");
+const MongoStore = require("./mongoStore");
+const { migrateLocalSessionToRemote } = require("./sessionMigration");
 
 // Load local .env safely using Node native API if file exists, without overwriting existing env
 const envFilePath = path.join(__dirname, ".env");
@@ -15,6 +18,70 @@ if (fs.existsSync(envFilePath) && typeof process.loadEnvFile === "function") {
     console.warn("Notice: Could not load local .env file:", err.message);
   }
 }
+
+// Database initialization for RemoteAuth persistence
+let mongoStore = null;
+let isMongoConnected = false;
+let mongoInitPromise = null;
+const MONGODB_URI = process.env.MONGODB_URI;
+
+async function initMongoDB() {
+  if (!MONGODB_URI || !MONGODB_URI.trim()) {
+    console.warn(
+      "⚠️ [Database] MONGODB_URI not provided. WhatsApp sessions will use ephemeral LocalAuth (Render restarts will require QR pairing)."
+    );
+    return;
+  }
+
+  try {
+    console.log("🔌 [Database] Connecting to MongoDB for WhatsApp session persistence...");
+    await mongoose.connect(MONGODB_URI.trim(), {
+      serverSelectionTimeoutMS: 5000,
+      connectTimeoutMS: 10000,
+      maxPoolSize: 5,
+    });
+    isMongoConnected = true;
+    mongoStore = new MongoStore({
+      mongooseInstance: mongoose,
+      dataPath: "./.wwebjs_auth",
+    });
+    console.log("✅ [Database] MongoDB connected successfully for RemoteAuth session persistence.");
+
+    // Fast O(1) startup discovery across all centers without launching Chromium
+    const savedRemoteCenters = await mongoStore.listSavedCenterIds();
+    for (const id of savedRemoteCenters) {
+      savedSessionCenters.add(id);
+      console.log(
+        `📁 [Database] Discovered saved remote session for center: ${id} (lazy on-demand ready)`
+      );
+    }
+  } catch (err) {
+    isMongoConnected = false;
+    mongoStore = null;
+    console.error(
+      "❌ [Database] Failed to connect to MongoDB for session persistence:",
+      err.message
+    );
+    console.warn(
+      "⚠️ [Database] Falling back to ephemeral LocalAuth until MongoDB is accessible."
+    );
+  }
+}
+
+mongoose.connection.on("disconnected", () => {
+  isMongoConnected = false;
+  console.warn(
+    "⚠️ [Database] MongoDB disconnected. RemoteAuth persistence may be temporarily unavailable."
+  );
+});
+
+mongoose.connection.on("reconnected", () => {
+  isMongoConnected = true;
+  console.log("✅ [Database] MongoDB reconnected.");
+});
+
+// Kick off MongoDB connection early
+mongoInitPromise = initMongoDB();
 
 // Validate WHATSAPP_INTERNAL_SECRET at startup and fail closed if missing or blank
 const INTERNAL_SECRET = process.env.WHATSAPP_INTERNAL_SECRET;
@@ -35,10 +102,30 @@ app.use(express.json());
 
 /**
  * Health check endpoint for orchestrators (e.g. Render)
- * Reports HTTP service health only. Does not require internal secret.
+ * Reports HTTP service health and persistence configuration status.
+ * Does not require internal secret.
  */
 app.get("/health", (req, res) => {
-  res.status(200).json({ status: "ok", service: "tuitiondesk-whatsapp" });
+  const isConfigured = Boolean(MONGODB_URI && MONGODB_URI.trim());
+  const persistenceStatus = isMongoConnected
+    ? "connected"
+    : isConfigured
+    ? "connecting_or_disconnected"
+    : "unconfigured_ephemeral";
+
+  const isDegraded = isConfigured && !isMongoConnected;
+
+  res.status(isDegraded ? 503 : 200).json({
+    status: isDegraded ? "degraded" : "ok",
+    service: "tuitiondesk-whatsapp",
+    persistence: {
+      mode: isMongoConnected ? "mongodb_remote" : "ephemeral_local",
+      status: persistenceStatus,
+      durable: Boolean(isMongoConnected),
+    },
+    uptimeSeconds: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
+  });
 });
 
 /**
@@ -238,18 +325,72 @@ async function initializeClient(centerId) {
     }
   }
 
-  const resolvedExecutable = getExecutablePath() || chromePath;
-  console.log(
-    `[Session: ${cleanCenterId}] Initializing WhatsApp Web Client with LocalAuth (Browser: ${
-      resolvedExecutable || "bundled-fallback"
-    })...`
-  );
+  // Await in-flight MongoDB initialization if server just booted
+  if (mongoInitPromise) {
+    try {
+      await mongoInitPromise;
+    } catch {
+      // ignore
+    }
+  }
 
-  const client = new Client({
-    authStrategy: new LocalAuth({
+  // If MongoDB persistence was explicitly configured but is currently disconnected,
+  // halt initialization to protect session state rather than silently creating an ephemeral session.
+  if (MONGODB_URI && MONGODB_URI.trim() && !isMongoConnected) {
+    throw new Error(
+      "Persistent session storage (MongoDB) is configured but currently unavailable. Halting client launch to protect session state."
+    );
+  }
+
+  // If this center is known to have a saved session, but MongoDB is not connected, halt launch.
+  if (savedSessionCenters.has(cleanCenterId) && !isMongoConnected) {
+    throw new Error(
+      `Center '${cleanCenterId}' has a saved session, but persistent storage (MongoDB) is unavailable. Halting Chromium launch to prevent session overwrite.`
+    );
+  }
+
+  const resolvedExecutable = getExecutablePath() || chromePath;
+
+  let authStrategy;
+  if (mongoStore && isMongoConnected) {
+    // Check and migrate existing LocalAuth directory to MongoDB before RemoteAuth runs
+    try {
+      await migrateLocalSessionToRemote({
+        centerId: cleanCenterId,
+        store: mongoStore,
+        dataPath: "./.wwebjs_auth",
+      });
+    } catch (migErr) {
+      console.warn(`[Center: ${cleanCenterId}] LocalAuth migration notice:`, migErr.message);
+    }
+
+    console.log(
+      `[Session: ${cleanCenterId}] Initializing WhatsApp Web Client with RemoteAuth (MongoDB, Browser: ${
+        resolvedExecutable || "bundled-fallback"
+      })...`
+    );
+
+    authStrategy = new RemoteAuth({
+      clientId: cleanCenterId,
+      store: mongoStore,
+      backupSyncIntervalMs: 300000, // 5 minutes periodic sync
+      dataPath: "./.wwebjs_auth",
+    });
+  } else {
+    console.log(
+      `[Session: ${cleanCenterId}] Initializing WhatsApp Web Client with LocalAuth fallback (Browser: ${
+        resolvedExecutable || "bundled-fallback"
+      })...`
+    );
+
+    authStrategy = new LocalAuth({
       clientId: cleanCenterId,
       dataPath: "./.wwebjs_auth",
-    }),
+    });
+  }
+
+  const client = new Client({
+    authStrategy,
     puppeteer: {
       headless: true,
       executablePath: resolvedExecutable || undefined,
@@ -305,9 +446,12 @@ async function initializeClient(centerId) {
   // Event: Authenticated
   client.on("authenticated", () => {
     sessionObj.status = "authenticated";
+    sessionObj.qr = null;
+    sessionObj.qrGeneratedAt = null;
+    sessionObj.isReady = false;
     sessionObj.updatedAt = new Date().toISOString();
     console.log(
-      `🔐 [Center: ${cleanCenterId}] WhatsApp Client Authenticated Successfully.`
+      `🔐 [Center: ${cleanCenterId}] WhatsApp Client Authenticated Successfully. Awaiting ready event...`
     );
   });
 
@@ -322,6 +466,14 @@ async function initializeClient(centerId) {
     console.log(`\n==================================================`);
     console.log(`✅ [Center: ${cleanCenterId}] WhatsApp Client is Ready!`);
     console.log(`==================================================\n`);
+  });
+
+  // Event: Remote session saved to MongoDB
+  client.on("remote_session_saved", () => {
+    savedSessionCenters.add(cleanCenterId);
+    console.log(
+      `💾 [Center: ${cleanCenterId}] WhatsApp session backed up to MongoDB successfully.`
+    );
   });
 
   // Event: Auth Failure
@@ -418,7 +570,17 @@ app.get("/status", (req, res) => {
       activeClientProcesses: activeClientsCount,
       readySessions: readySessionsCount,
       activeLocks: activeLocks.size,
-      savedSessionsOnDisk: savedSessionCenters.size,
+      savedSessions: savedSessionCenters.size,
+      isMongoConnected,
+    },
+    persistence: {
+      mode: isMongoConnected ? "mongodb_remote" : "ephemeral_local",
+      status: isMongoConnected
+        ? "connected"
+        : MONGODB_URI && MONGODB_URI.trim()
+        ? "error_disconnected"
+        : "unconfigured_ephemeral",
+      durable: Boolean(isMongoConnected),
     },
     sessions: sessionSummaries,
     timestamp: new Date().toISOString(),
@@ -430,7 +592,7 @@ app.get("/status", (req, res) => {
  * Returns the specific status and QR code for that center.
  * Does not initialize or launch Chromium as a side effect.
  */
-app.get("/status/:centerId", (req, res) => {
+app.get("/status/:centerId", async (req, res) => {
   const cleanCenterId = String(req.params.centerId || "")
     .trim()
     .toLowerCase();
@@ -442,10 +604,33 @@ app.get("/status/:centerId", (req, res) => {
     });
   }
 
+  // Await in-flight MongoDB initialization if server just booted
+  if (mongoInitPromise) {
+    try {
+      await mongoInitPromise;
+    } catch {
+      // ignore
+    }
+  }
+
+  // Check in-memory registry or query MongoDB directly as source of truth
+  let hasSavedSession = savedSessionCenters.has(cleanCenterId);
+  if (!hasSavedSession && mongoStore && isMongoConnected) {
+    try {
+      hasSavedSession = await mongoStore.sessionExists({
+        session: `RemoteAuth-${cleanCenterId}`,
+      });
+      if (hasSavedSession) {
+        savedSessionCenters.add(cleanCenterId);
+      }
+    } catch {
+      // ignore check error
+    }
+  }
+
   const session = sessions.get(cleanCenterId);
 
   if (!session) {
-    const hasSavedSession = savedSessionCenters.has(cleanCenterId);
     return res.json({
       success: true,
       centerId: cleanCenterId,
@@ -463,6 +648,7 @@ app.get("/status/:centerId", (req, res) => {
     success: true,
     centerId: cleanCenterId,
     status: session.status,
+    hasSavedSession,
     qr: session.qr,
     qrGeneratedAt: session.qrGeneratedAt || null,
     ready: session.isReady,
@@ -638,7 +824,46 @@ app.post("/reconnect/:centerId", async (req, res) => {
     // Remove stale session from memory
     sessions.delete(cleanCenterId);
 
-    // Spawn fresh client to trigger fresh QR generation
+    // Only delete remote session if an explicit user-requested new-pairing action is confirmed
+    const isExplicitNewPairing =
+      req.body?.action === "new_pairing" ||
+      req.query?.action === "new_pairing" ||
+      Boolean(req.body?.forceNewPairing);
+
+    if (isExplicitNewPairing) {
+      if (mongoStore && isMongoConnected) {
+        try {
+          await mongoStore.delete({ session: `RemoteAuth-${cleanCenterId}` });
+          savedSessionCenters.delete(cleanCenterId);
+          console.log(
+            `🗑️ Explicit new-pairing confirmed: Cleared remote session in MongoDB for center: ${cleanCenterId}`
+          );
+        } catch (delErr) {
+          console.error(
+            `❌ Failed to clear remote session on explicit new-pairing for ${cleanCenterId}:`,
+            delErr.message
+          );
+          throw new Error(
+            `Failed to clear previous saved session during new pairing: ${delErr.message}`
+          );
+        }
+      }
+
+      try {
+        const localRemoteDir = path.join(__dirname, ".wwebjs_auth", `RemoteAuth-${cleanCenterId}`);
+        if (fs.existsSync(localRemoteDir)) {
+          fs.rmSync(localRemoteDir, { recursive: true, force: true });
+        }
+      } catch {
+        // ignore
+      }
+    } else {
+      console.log(
+        `[Center: ${cleanCenterId}] Reconnect: preserving existing MongoDB credentials and attempting session restoration.`
+      );
+    }
+
+    // Spawn fresh client (restores saved session if present; generates fresh QR if unlinked)
     const newSession = await initializeClient(cleanCenterId);
 
     return res.json({
@@ -829,16 +1054,27 @@ app.post("/logout/:centerId", async (req, res) => {
     sessions.delete(cleanCenterId);
     savedSessionCenters.delete(cleanCenterId);
 
-    // Clean up local auth directory for this center only on explicit logout
+    // Delete remote session from MongoDB
+    if (mongoStore && isMongoConnected) {
+      try {
+        await mongoStore.delete({ session: `RemoteAuth-${cleanCenterId}` });
+        console.log(`🗑️ Deleted remote session in MongoDB for center: ${cleanCenterId}`);
+      } catch (dbErr) {
+        console.warn(`Could not delete remote session from MongoDB for ${cleanCenterId}:`, dbErr.message);
+      }
+    }
+
+    // Clean up local auth directories for this center only on explicit logout
     try {
-      const sessionDir = path.join(
-        __dirname,
-        ".wwebjs_auth",
-        `session-${cleanCenterId}`
-      );
-      if (fs.existsSync(sessionDir)) {
-        fs.rmSync(sessionDir, { recursive: true, force: true });
-        console.log(`🗑️ Removed session cache directory for ${cleanCenterId}`);
+      const dirsToClean = [
+        path.join(__dirname, ".wwebjs_auth", `RemoteAuth-${cleanCenterId}`),
+        path.join(__dirname, ".wwebjs_auth", `session-${cleanCenterId}`),
+      ];
+      for (const d of dirsToClean) {
+        if (fs.existsSync(d)) {
+          fs.rmSync(d, { recursive: true, force: true });
+          console.log(`🗑️ Removed local session cache directory: ${path.basename(d)}`);
+        }
       }
     } catch (cleanupErr) {
       console.warn("Could not delete session directory:", cleanupErr.message);
@@ -866,8 +1102,13 @@ try {
   if (fs.existsSync(authRoot)) {
     const entries = fs.readdirSync(authRoot, { withFileTypes: true });
     for (const ent of entries) {
-      if (ent.isDirectory() && ent.name.startsWith("session-")) {
-        const id = ent.name.replace("session-", "").trim().toLowerCase();
+      if (ent.isDirectory()) {
+        let id = null;
+        if (ent.name.startsWith("RemoteAuth-")) {
+          id = ent.name.replace("RemoteAuth-", "").trim().toLowerCase();
+        } else if (ent.name.startsWith("session-")) {
+          id = ent.name.replace("session-", "").trim().toLowerCase();
+        }
         if (id) {
           savedSessionCenters.add(id);
           console.log(
@@ -904,6 +1145,15 @@ async function handleGracefulShutdown(signal) {
       console.log(`[Center: ${centerId}] Closing WhatsApp client on shutdown...`);
       destroyPromises.push(destroyClientSafely(session.client, centerId));
     }
+  }
+
+  // Close MongoDB connection cleanly
+  if (mongoose.connection && mongoose.connection.readyState === 1) {
+    destroyPromises.push(
+      mongoose.connection.close().catch((err) => {
+        console.warn("Warning closing MongoDB connection:", err?.message || err);
+      })
+    );
   }
 
   // Bounded timeout: max 5 seconds for cleanup before exiting

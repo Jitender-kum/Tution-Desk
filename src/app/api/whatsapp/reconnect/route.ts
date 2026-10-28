@@ -30,11 +30,24 @@ export async function POST(request: NextRequest) {
     ).replace(/\/+$/, "");
     const upstreamUrl = `${baseUrl}/reconnect/${encodeURIComponent(centerId)}`;
 
+    // Safely parse optional incoming request body (e.g. { action: "new_pairing" })
+    let bodyData: Record<string, unknown> = {};
+    const incomingContentType = request.headers.get("content-type") || "";
+    if (incomingContentType.includes("application/json")) {
+      try {
+        bodyData = await request.json();
+      } catch {
+        // empty body fallback
+      }
+    }
+
     const res = await fetch(upstreamUrl, {
       method: "POST",
       headers: {
+        "Content-Type": "application/json",
         "x-internal-secret": internalSecret.trim(),
       },
+      body: JSON.stringify(bodyData),
       signal: AbortSignal.timeout(10000),
     });
 

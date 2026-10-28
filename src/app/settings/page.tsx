@@ -31,7 +31,14 @@ import {
 import { getCurrentCenterId } from "@/lib/apiClient";
 
 interface MicroserviceStatus {
-  status: "connected" | "qr_ready" | "disconnected" | "initializing" | "loading";
+  status:
+    | "connected"
+    | "qr_ready"
+    | "authenticated"
+    | "initializing"
+    | "disconnected"
+    | "loading";
+  hasSavedSession?: boolean;
   qr: string | null;
   qrGeneratedAt?: number | null;
   ready: boolean;
@@ -59,6 +66,16 @@ export default function SettingsPage() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const isMountedRef = useRef<boolean>(true);
   const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Synchronize state to refs so the chained polling loop never captures stale closures
+  const statusDataRef = useRef<MicroserviceStatus>(statusData);
+  statusDataRef.current = statusData;
+
+  const isInitializingRef = useRef<boolean>(isInitializing);
+  isInitializingRef.current = isInitializing;
+
+  const isRegeneratingRef = useRef<boolean>(isRegenerating);
+  isRegeneratingRef.current = isRegenerating;
 
   // Track mount state and abort any active polling/fetch on unmount
   useEffect(() => {
@@ -231,12 +248,12 @@ export default function SettingsPage() {
 
   // 2. Poll center-specific status: http://localhost:3005/status/:centerId
   const fetchStatus = useCallback(
-    async (isManualTrigger = false) => {
-      if (!centerId || !isMountedRef.current) return;
+    async (isManualTrigger = false): Promise<MicroserviceStatus | null> => {
+      if (!centerId || !isMountedRef.current) return null;
 
       // Prevent overlapping status requests unless manually requested
       if (isFetchingRef.current && !isManualTrigger) {
-        return;
+        return null;
       }
 
       // Abort any prior in-flight request before launching new one
@@ -255,7 +272,7 @@ export default function SettingsPage() {
 
         const data = await res.json().catch(() => null);
 
-        if (!isMountedRef.current) return;
+        if (!isMountedRef.current) return null;
 
         if (!res.ok) {
           throw new Error(data?.error || `HTTP error ${res.status}`);
@@ -264,13 +281,17 @@ export default function SettingsPage() {
         let resolvedStatus:
           | "connected"
           | "qr_ready"
-          | "disconnected"
-          | "initializing" = "disconnected";
+          | "authenticated"
+          | "initializing"
+          | "disconnected" = "disconnected";
 
         if (data?.status === "connected" || data?.ready === true) {
           resolvedStatus = "connected";
           setIsInitializing(false);
           setIsRegenerating(false);
+        } else if (data?.status === "authenticated") {
+          resolvedStatus = "authenticated";
+          // Device paired, awaiting ready event from WhatsApp Web
         } else if (data?.status === "qr_ready" && data?.qr) {
           // Prevent stale in-flight polling responses from overwriting a newer QR
           if (
@@ -278,7 +299,7 @@ export default function SettingsPage() {
             lastQrTimestampRef.current &&
             data.qrGeneratedAt < lastQrTimestampRef.current
           ) {
-            return;
+            return null;
           }
           if (data.qrGeneratedAt) {
             lastQrTimestampRef.current = data.qrGeneratedAt;
@@ -297,29 +318,33 @@ export default function SettingsPage() {
           setIsRegenerating(false);
         }
 
-        setStatusData({
+        const newStatus: MicroserviceStatus = {
           status: resolvedStatus,
-          qr: data?.qr || null,
-          qrGeneratedAt: data?.qrGeneratedAt || null,
+          hasSavedSession: Boolean(data?.hasSavedSession),
+          qr: resolvedStatus === "qr_ready" ? (data?.qr || null) : null,
+          qrGeneratedAt: resolvedStatus === "qr_ready" ? (data?.qrGeneratedAt || null) : null,
           ready: Boolean(data?.ready || resolvedStatus === "connected"),
           service: data?.service,
           timestamp: data?.timestamp,
           error: data?.error || undefined,
-        });
+        };
+
+        setStatusData(newStatus);
         setIsOffline(false);
         setLastPolled(new Date());
+        return newStatus;
       } catch (err: unknown) {
-        if (!isMountedRef.current) return;
+        if (!isMountedRef.current) return null;
         if (err instanceof Error && err.name === "AbortError") {
           // Clean abortion on component unmount or newer request, do not update state
-          return;
+          return null;
         }
         setIsOffline(true);
         setIsInitializing(false);
         setIsRegenerating(false);
-        setStatusData((prev) => ({
-          ...prev,
+        const errStatus: MicroserviceStatus = {
           status: "disconnected",
+          hasSavedSession: statusDataRef.current.hasSavedSession,
           qr: null,
           qrGeneratedAt: null,
           ready: false,
@@ -327,8 +352,10 @@ export default function SettingsPage() {
             err instanceof Error
               ? err.message
               : "WhatsApp service is currently unreachable",
-        }));
+        };
+        setStatusData(errStatus);
         setLastPolled(new Date());
+        return errStatus;
       } finally {
         isFetchingRef.current = false;
       }
@@ -336,85 +363,102 @@ export default function SettingsPage() {
     [centerId]
   );
 
+  // Chained adaptive polling loop that continuously schedules next check upon request completion
+  const scheduleNextPoll = useCallback(() => {
+    if (!isMountedRef.current) return;
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+
+    const currentStatus = statusDataRef.current.status;
+    const currentError = statusDataRef.current.error;
+    const isInit = isInitializingRef.current;
+    const isRegen = isRegeneratingRef.current;
+
+    let delayMs: number | null = null;
+
+    if (
+      isInit ||
+      isRegen ||
+      currentStatus === "initializing" ||
+      currentStatus === "qr_ready" ||
+      currentStatus === "authenticated"
+    ) {
+      // Actively waiting for QR code, scanning, or awaiting ready event
+      delayMs = 2500;
+    } else if (currentStatus === "connected") {
+      // Light keep-alive heartbeat
+      delayMs = 15000;
+    }
+
+    // Stop polling if delayMs is null or if there is an error while not actively pairing
+    if (!delayMs || (currentError && !isInit && !isRegen)) {
+      return;
+    }
+
+    pollTimerRef.current = setTimeout(async () => {
+      if (!isMountedRef.current) return;
+      await fetchStatus();
+      // Schedule subsequent check only after current fetch has completed
+      scheduleNextPoll();
+    }, delayMs);
+  }, [fetchStatus]);
+
   // Initial status fetch once centerId is resolved
   useEffect(() => {
     if (!centerId) return;
-    fetchStatus(true);
-  }, [centerId, fetchStatus]);
-
-  // Chained adaptive polling loop:
-  // - Polls every 3s while initializing or awaiting QR code scan (qr_ready)
-  // - Polls every 15s when connected (keep-alive heartbeat)
-  // - Halts polling when disconnected (unless actively initializing) or when an error occurred
-  useEffect(() => {
-    if (!centerId) return;
-
-    let isEffectActive = true;
-
-    // If an error occurred or session is disconnected while not actively pairing, do not poll
-    if (
-      statusData.error ||
-      (statusData.status === "disconnected" && !isInitializing && !isRegenerating)
-    ) {
-      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
-      return () => {
-        isEffectActive = false;
-      };
-    }
-
-    const pollIntervalMs =
-      isInitializing ||
-      isRegenerating ||
-      statusData.status === "initializing" ||
-      statusData.status === "qr_ready"
-        ? 3000
-        : statusData.status === "connected"
-        ? 15000
-        : null;
-
-    if (!pollIntervalMs) return;
-
-    if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
-    pollTimerRef.current = setTimeout(async () => {
-      if (!isEffectActive || !isMountedRef.current) return;
-      await fetchStatus();
-    }, pollIntervalMs);
-
-    return () => {
-      isEffectActive = false;
-      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
-    };
-  }, [
-    centerId,
-    fetchStatus,
-    isInitializing,
-    isRegenerating,
-    statusData.status,
-    statusData.error,
-  ]);
+    fetchStatus(true).then(() => {
+      scheduleNextPoll();
+    });
+  }, [centerId, fetchStatus, scheduleNextPoll]);
 
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
     await fetchStatus(true);
+    scheduleNextPoll();
     setTimeout(() => setIsRefreshing(false), 500);
   };
 
-  // Explicitly generate fresh QR code for this center
+  // Explicitly generate fresh QR code for this center (or reconnect saved session)
   const generateQRCode = async () => {
     if (!centerId || isInitializing || isRegenerating) return;
     setIsInitializing(true);
+    setStatusData((prev) => ({
+      ...prev,
+      status: "initializing",
+      error: undefined,
+    }));
+    scheduleNextPoll();
+
     try {
       const res = await fetch("/api/whatsapp/init", {
         method: "POST",
       });
+      const data = await res.json().catch(() => null);
       if (!res.ok) {
-        const data = await res.json().catch(() => null);
         throw new Error(
           data?.error || `Failed to initialize: HTTP ${res.status}`
         );
       }
-      // Immediate poll to pick up updated status from server
+      if (data?.qr) {
+        setStatusData((prev) => ({
+          ...prev,
+          status: "qr_ready",
+          qr: data.qr,
+          qrGeneratedAt: data.qrGeneratedAt || Date.now(),
+          ready: false,
+          error: undefined,
+        }));
+      } else if (data?.status === "connected" || data?.ready) {
+        setStatusData((prev) => ({
+          ...prev,
+          status: "connected",
+          qr: null,
+          ready: true,
+          error: undefined,
+        }));
+        setIsInitializing(false);
+      }
       await fetchStatus(true);
+      scheduleNextPoll();
     } catch (err: unknown) {
       console.error("Failed to generate QR code:", err);
       setIsInitializing(false);
@@ -429,15 +473,31 @@ export default function SettingsPage() {
   };
 
   // Safe reconnect and fresh QR generation for unlinked session
-  const handleRegenerateQR = async () => {
+  const handleRegenerateQR = async (
+    action?: "new_pairing" | "refresh" | unknown
+  ) => {
+    const requestedAction: "new_pairing" | "refresh" =
+      action === "new_pairing" ? "new_pairing" : "refresh";
     if (!centerId || isRegenerating || isInitializing) return;
     setIsRegenerating(true);
+    setStatusData((prev) => ({
+      ...prev,
+      status: "initializing",
+      qr: null,
+      error: undefined,
+    }));
+    scheduleNextPoll();
+
     try {
       const res = await fetch("/api/whatsapp/reconnect", {
         method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ action: requestedAction }),
       });
       const data = await res.json().catch(() => null);
-      if (!res.ok) {
+      if (!res.ok || data?.success === false) {
         throw new Error(
           data?.error || `Failed to regenerate QR: HTTP ${res.status}`
         );
@@ -468,6 +528,7 @@ export default function SettingsPage() {
 
       setIsInitializing(true);
       await fetchStatus(true);
+      scheduleNextPoll();
     } catch (err: unknown) {
       console.error("Failed to regenerate QR code:", err);
       setIsRegenerating(false);
@@ -480,6 +541,23 @@ export default function SettingsPage() {
       }));
     }
   };
+
+  // Explicit confirmation before deleting/replacing a saved session
+  const handlePairNewNumber = async () => {
+    if (!centerId || isRegenerating || isInitializing) return;
+
+    if (statusData.hasSavedSession) {
+      const confirmed = window.confirm(
+        `Are you sure you want to pair a new WhatsApp number for Center ${centerId}? This will remove the currently saved session.`
+      );
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    await handleRegenerateQR("new_pairing");
+  };
+
 
   // Cancel QR pairing and return to disconnected overview without deleting credentials
   const handleCancelQR = () => {
@@ -579,8 +657,10 @@ export default function SettingsPage() {
   };
 
   const isConnected = statusData.status === "connected" || statusData.ready;
+  const isAuthenticated = statusData.status === "authenticated";
   const isQrReady = statusData.status === "qr_ready" && Boolean(statusData.qr);
   const isInitState = isInitializing || statusData.status === "initializing";
+  const isLoading = statusData.status === "loading";
 
   return (
     <div className="w-full max-w-3xl mx-auto flex flex-col gap-6 px-4 sm:px-6 py-6 pb-36 animate-fade-in">
@@ -636,6 +716,8 @@ export default function SettingsPage() {
               className={`w-12 h-12 rounded-2xl flex items-center justify-center shadow-xs transition-all ${
                 isConnected
                   ? "bg-emerald-500 text-white shadow-emerald-500/20 ring-4 ring-emerald-50"
+                  : isAuthenticated
+                  ? "bg-emerald-600 text-white shadow-emerald-600/20 ring-4 ring-emerald-50"
                   : isQrReady
                   ? "bg-amber-500 text-white shadow-amber-500/20 ring-4 ring-amber-50"
                   : isInitState
@@ -647,9 +729,11 @@ export default function SettingsPage() {
             >
               {isConnected ? (
                 <Wifi className="w-6 h-6 animate-pulse" />
+              ) : isAuthenticated ? (
+                <RefreshCw className="w-6 h-6 animate-spin text-emerald-600" />
               ) : isQrReady ? (
                 <QrCode className="w-6 h-6" />
-              ) : isInitState ? (
+              ) : isInitState || isLoading ? (
                 <RefreshCw className="w-6 h-6 animate-spin" />
               ) : (
                 <WifiOff className="w-6 h-6" />
@@ -665,6 +749,8 @@ export default function SettingsPage() {
                   className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-extrabold tracking-wide uppercase ${
                     isConnected
                       ? "bg-emerald-100 text-emerald-800"
+                      : isAuthenticated
+                      ? "bg-emerald-100 text-emerald-800 animate-pulse"
                       : isQrReady
                       ? "bg-amber-100 text-amber-800 animate-pulse"
                       : isInitState
@@ -678,6 +764,8 @@ export default function SettingsPage() {
                     className={`w-2 h-2 rounded-full ${
                       isConnected
                         ? "bg-emerald-500 animate-pulse"
+                        : isAuthenticated
+                        ? "bg-emerald-500 animate-pulse"
                         : isQrReady
                         ? "bg-amber-500"
                         : isInitState
@@ -689,12 +777,18 @@ export default function SettingsPage() {
                   />
                   {isConnected
                     ? "Active & Connected"
+                    : isAuthenticated
+                    ? "Device Linked • Setting Up"
                     : isQrReady
                     ? "Awaiting QR Scan"
                     : isInitState
                     ? "Generating QR..."
+                    : isLoading
+                    ? "Checking Status..."
                     : isOffline
                     ? "Microservice Offline"
+                    : statusData.hasSavedSession
+                    ? "Session Saved"
                     : "Disconnected"}
                 </span>
               </div>
@@ -715,6 +809,7 @@ export default function SettingsPage() {
           </div>
         </div>
       </div>
+
 
       {/* Dynamic Content based on State */}
 
@@ -986,7 +1081,7 @@ export default function SettingsPage() {
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
             <button
               type="button"
-              onClick={handleRegenerateQR}
+              onClick={() => handleRegenerateQR("refresh")}
               disabled={isRegenerating || isInitializing}
               className="tap-bounce inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-2xl bg-amber-600 hover:bg-amber-700 active:scale-[0.98] text-white text-xs font-bold transition-all shadow-md shadow-amber-500/20 disabled:opacity-50 cursor-pointer"
             >
@@ -1015,8 +1110,164 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* 3. DISCONNECTED / MICROSERVICE OFFLINE STATE */}
-      {!isConnected && !isQrReady && (
+      {/* 2. AUTHENTICATED / FINALIZING STATE */}
+      {!isConnected && isAuthenticated && (
+        <div className="glass-card p-7 sm:p-8 rounded-3xl border-2 border-emerald-300 shadow-md bg-gradient-to-br from-emerald-50/60 via-white to-white space-y-4 text-center animate-fade-in">
+          <div className="w-14 h-14 rounded-2xl bg-emerald-500 text-white flex items-center justify-center mx-auto shadow-md shadow-emerald-500/30">
+            <CheckCircle2 className="w-8 h-8" />
+          </div>
+          <div className="max-w-md mx-auto space-y-2">
+            <h3 className="text-xl font-black text-slate-900 tracking-tight">
+              Device Linked Successfully!
+            </h3>
+            <p className="text-xs sm:text-sm text-slate-600 font-medium leading-relaxed">
+              Your phone has completed authentication. WhatsApp Web is synchronizing your business session and setting up encryption keys...
+            </p>
+            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold mt-2">
+              <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-600" />
+              <span>Finalizing WhatsApp Ready State...</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3. INITIAL LOADING STATE ON PAGE MOUNT / REFRESH */}
+      {isLoading && !isConnected && !isAuthenticated && (
+        <div className="glass-card p-10 rounded-3xl border border-slate-200/90 shadow-sm flex flex-col items-center justify-center gap-3 text-center animate-fade-in">
+          <RefreshCw className="w-8 h-8 animate-spin text-blue-600" />
+          <h3 className="text-base font-bold text-slate-800">
+            Checking WhatsApp Engine Status...
+          </h3>
+          <p className="text-xs text-slate-400">
+            Verifying connection with cloud microservice for Center {centerId || ""}
+          </p>
+        </div>
+      )}
+
+      {/* 4. QR READY STATE - USER SCANS QR CODE IN UI */}
+      {!isConnected && !isAuthenticated && !isLoading && isQrReady && statusData.qr && (
+        <div className="glass-card p-7 rounded-3xl border border-amber-200/80 shadow-md bg-gradient-to-b from-amber-50/40 via-white to-white space-y-6">
+          <div className="text-center max-w-md mx-auto space-y-1.5">
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 text-amber-800 text-xs font-bold">
+              <QrCode className="w-3.5 h-3.5" />
+              Pair Center: {centerId}
+            </div>
+            <h3 className="text-xl font-black text-slate-900 tracking-tight">
+              Scan QR Code to Connect WhatsApp
+            </h3>
+            <p className="text-xs text-slate-500">
+              Point your phone’s camera at this QR code to connect your
+              coaching center’s WhatsApp number.
+            </p>
+          </div>
+
+          {/* QR Code Presentation */}
+          <div className="flex flex-col items-center justify-center">
+            <div className="p-6 bg-white rounded-3xl shadow-lg shadow-slate-200/60 border-2 border-slate-200/80 relative">
+              <QRCodeSVG
+                value={statusData.qr}
+                size={240}
+                level="M"
+                includeMargin={true}
+              />
+              <div className="mt-3 flex flex-col items-center justify-center gap-1 text-[11px] text-slate-500 font-semibold">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                  <span>
+                    Live QR Code
+                    {statusData.qrGeneratedAt && (
+                      <span className="text-slate-400 font-normal">
+                        {" "}• Generated{" "}
+                        {Math.max(
+                          0,
+                          Math.floor(
+                            (currentTime - statusData.qrGeneratedAt) / 1000
+                          )
+                        ) < 5
+                          ? "just now"
+                          : `${Math.max(
+                              0,
+                              Math.floor(
+                                (currentTime - statusData.qrGeneratedAt) / 1000
+                              )
+                            )}s ago`}
+                      </span>
+                    )}
+                  </span>
+                </div>
+                {statusData.qrGeneratedAt &&
+                  Math.floor(
+                    (currentTime - statusData.qrGeneratedAt) / 1000
+                  ) > 50 && (
+                    <span className="text-[10px] text-amber-700 font-medium bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200/80">
+                      If scanning shows &quot;Could not link&quot;, click Regenerate below.
+                    </span>
+                  )}
+              </div>
+            </div>
+          </div>
+
+          {/* Step-by-Step Instructions */}
+          <div className="bg-slate-50 rounded-2xl p-5 border border-slate-200/80 space-y-3 max-w-md mx-auto">
+            <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+              <Smartphone className="w-4 h-4 text-blue-600" />
+              How to Link:
+            </h4>
+            <ol className="text-xs text-slate-600 space-y-2 list-decimal list-inside pl-1 leading-relaxed">
+              <li>
+                Open <strong className="text-slate-800">WhatsApp</strong> on
+                your phone.
+              </li>
+              <li>
+                Tap <strong className="text-slate-800">Settings</strong> (iOS)
+                or the <strong className="text-slate-800">Three Dots</strong>{" "}
+                (Android).
+              </li>
+              <li>
+                Select{" "}
+                <strong className="text-slate-800">Linked Devices</strong>, then
+                tap{" "}
+                <strong className="text-slate-800">Link a Device</strong>.
+              </li>
+              <li>Point your camera at this QR code to complete pairing.</li>
+            </ol>
+          </div>
+
+          {/* Action Buttons: Regenerate QR Code & Cancel */}
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+            <button
+              type="button"
+              onClick={() => handleRegenerateQR("refresh")}
+              disabled={isRegenerating || isInitializing}
+              className="tap-bounce inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-2xl bg-amber-600 hover:bg-amber-700 active:scale-[0.98] text-white text-xs font-bold transition-all shadow-md shadow-amber-500/20 disabled:opacity-50 cursor-pointer"
+            >
+              <RefreshCw
+                className={`w-3.5 h-3.5 ${
+                  isRegenerating ? "animate-spin" : ""
+                }`}
+              />
+              <span>
+                {isRegenerating
+                  ? "Regenerating QR Code..."
+                  : "Regenerate QR Code"}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleCancelQR}
+              disabled={isRegenerating}
+              className="tap-bounce inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-800 text-xs font-bold transition-all disabled:opacity-50 cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+              <span>Cancel</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 5. DISCONNECTED / MICROSERVICE OFFLINE STATE */}
+      {!isConnected && !isAuthenticated && !isLoading && !isQrReady && (
         <div className="glass-card p-8 rounded-3xl border border-slate-200 shadow-sm space-y-5 text-center">
           {isOffline ? (
             /* Show offline UI. If in local development, provide the terminal command. If in production, provide a production-aware message and status error. */
@@ -1072,8 +1323,63 @@ export default function SettingsPage() {
                 </button>
               </div>
             </>
+          ) : statusData.hasSavedSession ? (
+            /* A saved LocalAuth session exists on disk for this center */
+            <>
+              <div className="w-14 h-14 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto shadow-inner border border-emerald-100">
+                <ShieldCheck className="w-7 h-7 stroke-[1.8]" />
+              </div>
+              <div className="max-w-md mx-auto space-y-1.5">
+                <h3 className="text-lg font-black text-slate-900 tracking-tight">
+                  Saved WhatsApp Session Found
+                </h3>
+                <p className="text-xs text-slate-500 leading-relaxed font-medium">
+                  An authenticated session is saved for Center{" "}
+                  <strong className="text-slate-700 font-mono">{centerId}</strong>.
+                  Reconnect to activate message dispatching without scanning again.
+                </p>
+              </div>
+
+              <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={generateQRCode}
+                  disabled={isInitState}
+                  className="tap-bounce inline-flex items-center justify-center gap-2 px-6 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold text-xs shadow-md shadow-emerald-500/25 transition-all disabled:opacity-60 cursor-pointer"
+                >
+                  {isInitState ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Reconnecting Session...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Wifi className="w-4 h-4" />
+                      <span>Reconnect Saved WhatsApp Account</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handlePairNewNumber}
+                  disabled={isInitState || isRegenerating}
+                  className="tap-bounce inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-bold transition-all cursor-pointer"
+                >
+                  <QrCode className="w-3.5 h-3.5" />
+                  <span>Pair New Number Instead</span>
+                </button>
+              </div>
+
+              {statusData.error && (
+                <div className="p-3.5 rounded-2xl bg-rose-50 text-rose-800 text-xs font-medium max-w-md mx-auto border border-rose-200 flex items-center gap-2 text-left">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-600" />
+                  <span className="leading-relaxed">{statusData.error}</span>
+                </div>
+              )}
+            </>
           ) : (
-            /* Microservice is responding but status is disconnected or null */
+            /* Fresh unlinked center without a saved session */
             <>
               <div className="w-14 h-14 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mx-auto shadow-inner border border-blue-100">
                 <QrCode className="w-7 h-7 stroke-[1.8]" />
