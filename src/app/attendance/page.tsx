@@ -185,27 +185,29 @@ export default function AttendancePage() {
     }));
   }, [allStudents, selectedBatchId]);
 
-  // Toggle individual student status
-  const handleToggleStatus = (
-    studentId: string,
-    newStatus: AttendanceStatus
-  ) => {
-    setIsSaved(false);
-    setAttendanceMap((prev) => ({
-      ...prev,
-      [studentId]: newStatus,
-    }));
-  };
+  // Toggle individual student status (stable callback reference for React.memo)
+  const handleToggleStatus = useCallback(
+    (studentId: string, newStatus: AttendanceStatus) => {
+      setIsSaved(false);
+      setAttendanceMap((prev) => ({
+        ...prev,
+        [studentId]: newStatus,
+      }));
+    },
+    []
+  );
 
   // Mark all students in current batch present
-  const handleMarkAllPresent = () => {
+  const handleMarkAllPresent = useCallback(() => {
     setIsSaved(false);
-    const updated: Record<string, AttendanceStatus> = {};
-    currentBatchStudents.forEach((std) => {
-      updated[std.id] = "present";
+    setAttendanceMap((prev) => {
+      const updated: Record<string, AttendanceStatus> = {};
+      currentBatchStudents.forEach((std) => {
+        updated[std.id] = "present";
+      });
+      return { ...prev, ...updated };
     });
-    setAttendanceMap((prev) => ({ ...prev, ...updated }));
-  };
+  }, [currentBatchStudents]);
 
   // Live counts
   const presentCount = currentBatchStudents.filter(

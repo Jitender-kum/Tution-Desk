@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Check, X, Phone } from "lucide-react";
 import { StudentAttendanceItem, AttendanceStatus } from "@/types";
 
@@ -7,7 +8,7 @@ interface StudentAttendanceRowProps {
   onToggleStatus: (studentId: string, status: AttendanceStatus) => void;
 }
 
-export default function StudentAttendanceRow({
+function StudentAttendanceRow({
   student,
   status,
   onToggleStatus,
@@ -101,3 +102,5 @@ export default function StudentAttendanceRow({
     </div>
   );
 }
+
+export default memo(StudentAttendanceRow);

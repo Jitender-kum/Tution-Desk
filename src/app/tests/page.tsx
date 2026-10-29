@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useDeferredValue } from "react";
 import CreateTestModal from "@/components/modals/CreateTestModal";
 import EnterMarksModal from "@/components/modals/EnterMarksModal";
 import { apiClient, getCurrentCenterId } from "@/lib/apiClient";
@@ -38,6 +38,7 @@ export default function TestsPage() {
   const [loading, setLoading] = useState(true);
   const [selectedBatchFilter, setSelectedBatchFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const deferredSearchQuery = useDeferredValue(searchQuery);
 
   // Modal States
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -99,17 +100,18 @@ export default function TestsPage() {
 
   // Filtered Tests
   const filteredTests = useMemo(() => {
+    const q = deferredSearchQuery.trim().toLowerCase();
     return tests.filter((t) => {
       const matchBatch =
         selectedBatchFilter === "all" || t.batch === selectedBatchFilter;
       const matchSearch =
-        searchQuery.trim() === "" ||
-        t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        t.batch.toLowerCase().includes(searchQuery.toLowerCase());
+        q === "" ||
+        t.title.toLowerCase().includes(q) ||
+        t.batch.toLowerCase().includes(q);
 
       return matchBatch && matchSearch;
     });
-  }, [tests, selectedBatchFilter, searchQuery]);
+  }, [tests, selectedBatchFilter, deferredSearchQuery]);
 
   // Summary Metrics
   const metrics = useMemo(() => {
