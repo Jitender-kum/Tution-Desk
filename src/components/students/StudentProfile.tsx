@@ -3,8 +3,8 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import TopHeader from "@/components/layout/TopHeader";
-import { apiClient, CURRENT_CENTER_ID } from "@/lib/apiClient";
+import { useSetHeader } from "@/components/layout/HeaderContext";
+import { apiClient, getCurrentCenterId } from "@/lib/apiClient";
 import { StudentRecord } from "@/types";
 import {
   ArrowLeft,
@@ -106,6 +106,13 @@ export default function StudentProfile({ studentId, onBack }: StudentProfileProp
   const [error, setError] = useState<string | null>(null);
   const [activeLedgerTab, setActiveLedgerTab] = useState<"all" | "paid" | "pending">("all");
 
+  // Synchronize student profile header title and badge with persistent TopHeader
+  useSetHeader({
+    title: student ? `${student.name} • 360° Profile` : "Student Profile",
+    subtitle: "Fee Ledger, Academic Attendance & Portal Management",
+    badgeText: student?.batch || "Student",
+  });
+
   // Modal 1: Record Cash Payment Form
   const [isCashModalOpen, setIsCashModalOpen] = useState(false);
   const [amountInput, setAmountInput] = useState<string>("");
@@ -184,7 +191,7 @@ export default function StudentProfile({ studentId, onBack }: StudentProfileProp
         method: "POST",
         body: {
           studentId,
-          centerId: student?.centerId || CURRENT_CENTER_ID,
+          centerId: student?.centerId || getCurrentCenterId(),
           amount: numAmount,
           type: feeType,
           notes: notesInput.trim(),
@@ -251,12 +258,6 @@ export default function StudentProfile({ studentId, onBack }: StudentProfileProp
 
   return (
     <div className="flex flex-col min-h-full relative bg-slate-50/50 pb-24 w-full max-w-full overflow-x-hidden">
-      {/* Top Header */}
-      <TopHeader
-        title={student ? `${student.name} • 360° Profile` : "Student Profile"}
-        subtitle="Fee Ledger, Academic Attendance & Portal Management"
-        badgeText={student?.batch || "Student"}
-      />
 
       {/* Floating Success Toast */}
       {toastMessage && (

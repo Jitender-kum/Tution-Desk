@@ -14,7 +14,7 @@ import {
   UserCheck,
   UserX,
 } from "lucide-react";
-import { apiClient, CURRENT_CENTER_ID } from "@/lib/apiClient";
+import { apiClient, getCurrentCenterId } from "@/lib/apiClient";
 import { TestRecord, StudentRecord, TestResult } from "@/types";
 
 interface EnterMarksModalProps {
@@ -82,7 +82,7 @@ export default function EnterMarksModal({
 
         const res = await apiClient<StudentRecord[]>("/students", {
           params: {
-            centerId: CURRENT_CENTER_ID,
+            centerId: getCurrentCenterId(),
             batch: test.batch,
           },
         });

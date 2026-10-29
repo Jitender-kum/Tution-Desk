@@ -15,7 +15,7 @@ import {
   AlertCircle,
   Sparkles,
 } from "lucide-react";
-import { apiClient, CURRENT_CENTER_ID } from "@/lib/apiClient";
+import { apiClient, getCurrentCenterId } from "@/lib/apiClient";
 import { StudentRecord, BatchRecord } from "@/types";
 
 export interface StudentFormData {
@@ -82,7 +82,7 @@ export default function StudentFormModal({
       try {
         setLoadingBatches(true);
         const res = await apiClient<BatchRecord[]>("/batches", {
-          params: { centerId: CURRENT_CENTER_ID },
+          params: { centerId: getCurrentCenterId() },
         });
         if (res.data && res.data.length > 0) {
           setFetchedBatches(res.data.map((b) => b.name));
@@ -212,7 +212,7 @@ export default function StudentFormModal({
         const res = await apiClient<StudentRecord>("/students", {
           method: "POST",
           body: {
-            centerId: CURRENT_CENTER_ID,
+            centerId: getCurrentCenterId(),
             name: cleanName,
             batch: finalBatch,
             parentWhatsApp: cleanPhone,

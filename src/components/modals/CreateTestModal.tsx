@@ -11,7 +11,7 @@ import {
   AlertCircle,
   Plus,
 } from "lucide-react";
-import { apiClient, CURRENT_CENTER_ID } from "@/lib/apiClient";
+import { apiClient, getCurrentCenterId } from "@/lib/apiClient";
 import { TestRecord, BatchRecord } from "@/types";
 
 interface CreateTestModalProps {
@@ -55,7 +55,7 @@ export default function CreateTestModal({
       try {
         setLoadingBatches(true);
         const res = await apiClient<BatchRecord[]>("/batches", {
-          params: { centerId: CURRENT_CENTER_ID },
+          params: { centerId: getCurrentCenterId() },
         });
         if (res.data && res.data.length > 0) {
           const names = res.data.map((b) => b.name);
@@ -116,7 +116,7 @@ export default function CreateTestModal({
       const res = await apiClient<TestRecord>("/tests", {
         method: "POST",
         body: {
-          centerId: CURRENT_CENTER_ID,
+          centerId: getCurrentCenterId(),
           title: cleanTitle,
           batch: cleanBatch,
           date: date || new Date().toISOString(),

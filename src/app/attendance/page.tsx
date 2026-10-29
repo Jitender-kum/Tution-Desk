@@ -1,11 +1,10 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import TopHeader from "@/components/layout/TopHeader";
 import AttendanceHeader from "@/components/attendance/AttendanceHeader";
 import StudentAttendanceRow from "@/components/attendance/StudentAttendanceRow";
 import StickySaveBar from "@/components/attendance/StickySaveBar";
-import { apiClient, CURRENT_CENTER_ID } from "@/lib/apiClient";
+import { apiClient, getCurrentCenterId } from "@/lib/apiClient";
 import {
   AttendanceStatus,
   QuickBatchAttendance,
@@ -72,7 +71,7 @@ export default function AttendancePage() {
     setError(null);
     try {
       const res = await apiClient<ApiStudent[]>("/students", {
-        params: { centerId: CURRENT_CENTER_ID },
+        params: { centerId: getCurrentCenterId() },
       });
 
       const students = res.data || [];
@@ -246,7 +245,7 @@ export default function AttendancePage() {
           apiClient("/attendance", {
             method: "POST",
             body: {
-              centerId: CURRENT_CENTER_ID,
+              centerId: getCurrentCenterId(),
               studentId: s.id,
               date: todayDate,
               batch: selectedBatchId,
@@ -276,11 +275,6 @@ export default function AttendancePage() {
 
   return (
     <div className="flex flex-col min-h-full relative">
-      {/* Top Header */}
-      <TopHeader
-        subtitle="Daily Attendance Checklist"
-        badgeText="Owner"
-      />
 
       {/* Floating Save Toast Notification */}
       {notificationToast && (

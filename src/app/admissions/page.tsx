@@ -1,10 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import TopHeader from "@/components/layout/TopHeader";
 import StudentFormModal from "@/components/modals/StudentFormModal";
 import CreateBatchModal from "@/components/modals/CreateBatchModal";
-import { apiClient, CURRENT_CENTER_ID } from "@/lib/apiClient";
+import { apiClient, getCurrentCenterId } from "@/lib/apiClient";
 import { StudentRecord, BatchRecord } from "@/types";
 import Link from "next/link";
 import {
@@ -112,7 +111,7 @@ export default function AdmissionsPage() {
   const fetchStudents = useCallback(async () => {
     try {
       const res = await apiClient<StudentRecord[]>("/students", {
-        params: { centerId: CURRENT_CENTER_ID },
+        params: { centerId: getCurrentCenterId() },
       });
       setStudents(res.data || []);
     } catch (err) {
@@ -124,7 +123,7 @@ export default function AdmissionsPage() {
   const fetchBatches = useCallback(async () => {
     try {
       const res = await apiClient<BatchRecord[]>("/batches", {
-        params: { centerId: CURRENT_CENTER_ID },
+        params: { centerId: getCurrentCenterId() },
       });
       setBatches(res.data || []);
     } catch (err) {
@@ -269,11 +268,6 @@ export default function AdmissionsPage() {
 
   return (
     <div className="flex flex-col min-h-full">
-      {/* 1. Header */}
-      <TopHeader
-        subtitle="Admissions & Student Management"
-        badgeText="Owner"
-      />
 
       {/* Floating Success Feedback Toast */}
       {toastMessage && (

@@ -11,7 +11,7 @@ import {
   AlertCircle,
   Clock,
 } from "lucide-react";
-import { apiClient, CURRENT_CENTER_ID } from "@/lib/apiClient";
+import { apiClient, getCurrentCenterId } from "@/lib/apiClient";
 
 interface AddFeeModalProps {
   isOpen: boolean;
@@ -51,7 +51,7 @@ export default function AddFeeModal({
       setError(null);
       try {
         const res = await apiClient<StudentOption[]>("/students", {
-          params: { centerId: CURRENT_CENTER_ID },
+          params: { centerId: getCurrentCenterId() },
         });
 
         const list = res.data || [];
@@ -106,7 +106,7 @@ export default function AddFeeModal({
       const res = await apiClient("/fees", {
         method: "POST",
         body: {
-          centerId: CURRENT_CENTER_ID,
+          centerId: getCurrentCenterId(),
           studentId,
           month: cleanMonth,
           amountDue: numAmount,

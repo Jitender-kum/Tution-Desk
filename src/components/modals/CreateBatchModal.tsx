@@ -10,7 +10,7 @@ import {
   AlertCircle,
   Plus,
 } from "lucide-react";
-import { apiClient, CURRENT_CENTER_ID } from "@/lib/apiClient";
+import { apiClient, getCurrentCenterId } from "@/lib/apiClient";
 import { BatchRecord } from "@/types";
 
 interface CreateBatchModalProps {
@@ -64,7 +64,7 @@ export default function CreateBatchModal({
       const res = await apiClient<BatchRecord>("/batches", {
         method: "POST",
         body: {
-          centerId: CURRENT_CENTER_ID,
+          centerId: getCurrentCenterId(),
           name: cleanName,
           subject: subject.trim() || undefined,
           timing: timing.trim() || undefined,

@@ -2,8 +2,8 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { Loader2, RefreshCw, AlertCircle } from "lucide-react";
-import TopHeader from "@/components/layout/TopHeader";
 import PendingFeesHeroCard from "@/components/dashboard/PendingFeesHeroCard";
+import { getAuthenticatedCenter } from "@/lib/centerProfile";
 import StatsRow from "@/components/dashboard/StatsRow";
 import QuickActions from "@/components/dashboard/QuickActions";
 import TodayScheduleTimeline from "@/components/dashboard/TodayScheduleTimeline";
@@ -121,15 +121,15 @@ export default function DashboardPage() {
         setActivities(formattedActivities);
       }
 
-      // 2. Fetch authenticated center info for header display
-      fetch("/api/auth/me")
-        .then((r) => (r.ok ? r.json() : null))
-        .then((meData) => {
-          if (meData?.center?.name) {
+      // 2. Fetch authenticated center info using deduplicated cache
+      getAuthenticatedCenter()
+        .then((center) => {
+          if (center?.name) {
             setCenterInfo((prev) => ({
               ...prev,
-              name: meData.center.name,
-              ownerName: meData.center.ownerName || prev.ownerName,
+              name: center.name,
+              ownerName: center.ownerName || prev.ownerName,
+              tagline: center.tagline || prev.tagline,
             }));
           }
         })
@@ -173,12 +173,6 @@ export default function DashboardPage() {
 
   return (
     <div className="flex flex-col min-h-full">
-      {/* Mobile Top Header with Center Branding */}
-      <TopHeader
-        title={centerInfo.name}
-        subtitle={centerInfo.tagline}
-        badgeText="Owner"
-      />
 
       {/* Main Content Area */}
       <div className="p-4 space-y-4.5 pb-6">

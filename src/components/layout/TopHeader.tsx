@@ -15,8 +15,10 @@ import {
   ChevronRight,
   X,
 } from "lucide-react";
+import { useHeader } from "@/components/layout/HeaderContext";
+import { getAuthenticatedCenter, clearCachedCenter } from "@/lib/centerProfile";
 
-interface TopHeaderProps {
+export interface TopHeaderProps {
   title?: string;
   subtitle?: string;
   badgeText?: string;
@@ -33,16 +35,66 @@ interface AlertItem {
   time: string;
 }
 
-export default function TopHeader({
-  title,
-  subtitle = "Classes 8th - 12th • CBSE & State",
-  badgeText,
-  showNotifications = true,
-  showLogout = true,
-}: TopHeaderProps) {
+const ROUTE_DEFAULTS: Record<
+  string,
+  { title?: string; subtitle: string; badgeText?: string }
+> = {
+  "/": {
+    subtitle: "Classes 8th - 12th • CBSE & State",
+    badgeText: "Owner",
+  },
+  "/attendance": {
+    subtitle: "Daily Attendance Checklist",
+    badgeText: "Owner",
+  },
+  "/fees": {
+    title: "Fee Management",
+    subtitle: "Pending Dues, Reviews & Paid History",
+    badgeText: "Due",
+  },
+  "/tests": {
+    subtitle: "Tests & Performance Management",
+    badgeText: "Owner",
+  },
+  "/admissions": {
+    subtitle: "Admissions & Student Management",
+    badgeText: "Owner",
+  },
+};
+
+function computeInitials(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length >= 2) {
+    return (words[0][0] + words[1][0]).toUpperCase();
+  } else if (words.length === 1) {
+    return words[0].slice(0, 2).toUpperCase();
+  }
+  return "TD";
+}
+
+export default function TopHeader(props: TopHeaderProps) {
   const router = useRouter();
-  const pathname = usePathname();
-  const isParentPortal = pathname?.startsWith("/p/");
+  const pathname = usePathname() || "";
+  const headerContext = useHeader();
+  const config = headerContext?.headerConfig || {};
+
+  const isParentPortal =
+    pathname.startsWith("/p/") || pathname === "/login" || pathname === "/parent";
+  const isSettingsPage = pathname === "/settings";
+
+  const routeDefault = ROUTE_DEFAULTS[pathname];
+
+  const title = props.title ?? config.title ?? routeDefault?.title;
+  const subtitle =
+    props.subtitle ??
+    config.subtitle ??
+    routeDefault?.subtitle ??
+    "Classes 8th - 12th • CBSE & State";
+  const badgeText = props.badgeText ?? config.badgeText ?? routeDefault?.badgeText;
+  const showNotifications =
+    props.showNotifications ?? config.showNotifications ?? true;
+  const showLogout = props.showLogout ?? config.showLogout ?? true;
+
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [centerName, setCenterName] = useState("Loading...");
   const [initials, setInitials] = useState("");
@@ -53,24 +105,16 @@ export default function TopHeader({
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // 1. Fetch authenticated Center Profile
+  // 1. Fetch authenticated Center Profile (cached & deduplicated, skipped on public parent portal)
   useEffect(() => {
-    fetch("/api/auth/me")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data?.center?.name) {
-          const name = String(data.center.name).trim();
-          setCenterName(name);
+    if (isParentPortal) return;
 
-          // Compute dynamic initials (e.g., "Apex Tutorials" -> "AT", "Sharma Classes" -> "SC")
-          const words = name.split(/\s+/).filter(Boolean);
-          if (words.length >= 2) {
-            setInitials((words[0][0] + words[1][0]).toUpperCase());
-          } else if (words.length === 1) {
-            setInitials(words[0].slice(0, 2).toUpperCase());
-          } else {
-            setInitials("TD");
-          }
+    getAuthenticatedCenter()
+      .then((center) => {
+        if (center?.name) {
+          const name = center.name;
+          setCenterName(name);
+          setInitials(computeInitials(name));
         } else {
           setCenterName("Tuition Center");
           setInitials("TC");
@@ -80,11 +124,11 @@ export default function TopHeader({
         setCenterName("Tuition Center");
         setInitials("TC");
       });
-  }, []);
+  }, [isParentPortal]);
 
-  // 2. Fetch Dynamic Smart Notifications
+  // 2. Fetch Dynamic Smart Notifications (skipped on public parent portal)
   useEffect(() => {
-    if (!showNotifications) return;
+    if (!showNotifications || isParentPortal) return;
 
     fetch("/api/notifications")
       .then((res) => (res.ok ? res.json() : null))
@@ -95,7 +139,7 @@ export default function TopHeader({
         }
       })
       .catch(() => {});
-  }, [showNotifications]);
+  }, [showNotifications, isParentPortal]);
 
   // 3. Click-outside listener for dropdown
   useEffect(() => {
@@ -119,6 +163,7 @@ export default function TopHeader({
   const handleLogout = async () => {
     setIsLoggingOut(true);
     try {
+      clearCachedCenter();
       await fetch("/api/auth/logout", {
         method: "POST",
       });
@@ -130,6 +175,11 @@ export default function TopHeader({
     }
   };
 
+  // If in Settings, hide header without unmounting to retain state in memory
+  if (isSettingsPage) {
+    return <div className="hidden" aria-hidden="true" />;
+  }
+
   const displayTitle =
     title &&
     title !== "Aroven Classes" &&
@@ -138,12 +188,18 @@ export default function TopHeader({
       ? title
       : centerName;
 
+  const resolvedInitials =
+    initials ||
+    (displayTitle && displayTitle !== "Loading..."
+      ? computeInitials(displayTitle)
+      : "TD");
+
   return (
     <header className="sticky top-0 z-40 glass-surface border-b border-slate-200/80 px-4 py-3 flex items-center justify-between">
       <div className="flex items-center gap-3">
         {/* Brand Avatar / Dynamic Center Initials */}
         <div className="w-10 h-10 rounded-xl bg-[var(--primary-color)] text-white flex items-center justify-center font-bold text-sm shadow-sm shadow-blue-500/20 ring-2 ring-blue-100 flex-shrink-0">
-          {initials || (
+          {resolvedInitials || (
             <span className="w-3.5 h-3.5 rounded-full bg-white/40 animate-pulse" />
           )}
         </div>

@@ -11,7 +11,7 @@ import {
   CheckCircle2,
   AlertCircle,
 } from "lucide-react";
-import { apiClient, CURRENT_CENTER_ID } from "@/lib/apiClient";
+import { apiClient, getCurrentCenterId } from "@/lib/apiClient";
 
 interface AddStudentModalProps {
   isOpen: boolean;
@@ -74,7 +74,7 @@ export default function AddStudentModal({
       const res = await apiClient("/students", {
         method: "POST",
         body: {
-          centerId: CURRENT_CENTER_ID,
+          centerId: getCurrentCenterId(),
           name: cleanName,
           batch: finalBatch,
           parentWhatsApp: cleanPhone,

@@ -1,11 +1,11 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import TopHeader from "@/components/layout/TopHeader";
+import { useSetHeader } from "@/components/layout/HeaderContext";
 import FeesSummaryHeroCard from "@/components/fees/FeesSummaryHeroCard";
 import GlobalReminderButton from "@/components/fees/GlobalReminderButton";
 import OverdueStudentItem from "@/components/fees/OverdueStudentItem";
-import { apiClient, CURRENT_CENTER_ID } from "@/lib/apiClient";
+import { apiClient, getCurrentCenterId } from "@/lib/apiClient";
 import { OverdueFeeStudent } from "@/types";
 import {
   CheckCircle2,
@@ -148,20 +148,31 @@ export default function FeesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Synchronize dynamic badge count with persistent TopHeader
+  useSetHeader({
+    title: "Fee Management",
+    subtitle: "Pending Dues, Reviews & Paid History",
+    badgeText:
+      reviewStudents.length > 0
+        ? `${reviewStudents.length} Review`
+        : `${pendingStudents.length} Due`,
+  });
+
   // Fetch fee data strictly separated by status
   const fetchFeesData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
+      const activeCenterId = getCurrentCenterId();
       const [pendingRes, reviewRes, paidRes] = await Promise.allSettled([
         apiClient<ApiFee[]>("/fees", {
-          params: { centerId: CURRENT_CENTER_ID, status: "Pending" },
+          params: { centerId: activeCenterId, status: "Pending" },
         }),
         apiClient<ApiFee[]>("/fees", {
-          params: { centerId: CURRENT_CENTER_ID, status: "Verification Pending" },
+          params: { centerId: activeCenterId, status: "Verification Pending" },
         }),
         apiClient<ApiFee[]>("/fees", {
-          params: { centerId: CURRENT_CENTER_ID, status: "Paid" },
+          params: { centerId: activeCenterId, status: "Paid" },
         }),
       ]);
 
@@ -378,16 +389,6 @@ export default function FeesPage() {
 
   return (
     <div className="flex flex-col min-h-full relative">
-      {/* Top Header */}
-      <TopHeader
-        title="Fee Management"
-        subtitle="Pending Dues, Reviews & Paid History"
-        badgeText={
-          reviewStudents.length > 0
-            ? `${reviewStudents.length} Review`
-            : `${pendingStudents.length} Due`
-        }
-      />
 
       {/* Floating Toast Notification */}
       {toastMessage && (

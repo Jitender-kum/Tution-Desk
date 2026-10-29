@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { clearCachedCenter } from "@/lib/centerProfile";
 import {
   ShieldCheck,
   Building2,
@@ -36,6 +37,11 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Invalidate any stale in-memory center profile on login route mount
+  useEffect(() => {
+    clearCachedCenter();
+  }, []);
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -57,6 +63,7 @@ export default function LoginPage() {
     }
 
     setLoading(true);
+    clearCachedCenter();
 
     try {
       const res = await fetch("/api/auth/login", {
@@ -71,6 +78,7 @@ export default function LoginPage() {
       const data = await res.json();
 
       if (!res.ok || !data.success) {
+        clearCachedCenter();
         throw new Error(data.error || "Invalid phone number or password.");
       }
 
@@ -81,9 +89,11 @@ export default function LoginPage() {
         localStorage.setItem("auth_token", data.token);
       }
 
+      clearCachedCenter();
       router.push("/");
       router.refresh();
     } catch (err: unknown) {
+      clearCachedCenter();
       const msg =
         err instanceof Error ? err.message : "Unable to login. Please try again.";
       setError(msg);
@@ -121,6 +131,7 @@ export default function LoginPage() {
     }
 
     setLoading(true);
+    clearCachedCenter();
 
     try {
       const res = await fetch("/api/auth/register", {
@@ -137,6 +148,7 @@ export default function LoginPage() {
       const data = await res.json();
 
       if (!res.ok || !data.success) {
+        clearCachedCenter();
         throw new Error(data.error || "Registration failed.");
       }
 
@@ -147,9 +159,11 @@ export default function LoginPage() {
         localStorage.setItem("auth_token", data.token);
       }
 
+      clearCachedCenter();
       router.push("/");
       router.refresh();
     } catch (err: unknown) {
+      clearCachedCenter();
       const msg =
         err instanceof Error
           ? err.message

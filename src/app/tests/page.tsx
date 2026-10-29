@@ -1,10 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import TopHeader from "@/components/layout/TopHeader";
 import CreateTestModal from "@/components/modals/CreateTestModal";
 import EnterMarksModal from "@/components/modals/EnterMarksModal";
-import { apiClient, CURRENT_CENTER_ID } from "@/lib/apiClient";
+import { apiClient, getCurrentCenterId } from "@/lib/apiClient";
 import { TestRecord, BatchRecord } from "@/types";
 import {
   FileText,
@@ -59,7 +58,7 @@ export default function TestsPage() {
   const fetchTests = useCallback(async () => {
     try {
       const res = await apiClient<TestRecord[]>("/tests", {
-        params: { centerId: CURRENT_CENTER_ID },
+        params: { centerId: getCurrentCenterId() },
       });
       setTests(res.data || []);
     } catch (err) {
@@ -71,7 +70,7 @@ export default function TestsPage() {
   const fetchBatches = useCallback(async () => {
     try {
       const res = await apiClient<BatchRecord[]>("/batches", {
-        params: { centerId: CURRENT_CENTER_ID },
+        params: { centerId: getCurrentCenterId() },
       });
       setBatches(res.data || []);
     } catch (err) {
@@ -138,11 +137,6 @@ export default function TestsPage() {
 
   return (
     <div className="flex flex-col min-h-full pb-20">
-      {/* 1. Top Header */}
-      <TopHeader
-        subtitle="Tests & Performance Management"
-        badgeText="Owner"
-      />
 
       {/* Floating Success Feedback Toast */}
       {toastMessage && (
