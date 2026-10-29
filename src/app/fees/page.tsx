@@ -15,6 +15,7 @@ import {
   ShieldCheck,
   Clock,
   Sparkles,
+  Loader2,
 } from "lucide-react";
 
 interface ApiStudentRef {
@@ -133,6 +134,8 @@ export default function FeesPage() {
   const [reviewStudents, setReviewStudents] = useState<OverdueFeeStudent[]>([]);
   const [paidStudents, setPaidStudents] = useState<OverdueFeeStudent[]>([]);
   const [collectedAmount, setCollectedAmount] = useState<number>(0);
+  const [loadingPaid, setLoadingPaid] = useState<boolean>(false);
+  const [hasLoadedPaid, setHasLoadedPaid] = useState<boolean>(false);
 
   // Sub-filter for Pending Dues tab
   const [pendingFilter, setPendingFilter] = useState<"all" | "critical" | "moderate">("all");
@@ -158,21 +161,47 @@ export default function FeesPage() {
         : `${pendingStudents.length} Due`,
   });
 
-  // Fetch fee data strictly separated by status
+  // Lazy fetch historical paid records on demand
+  const fetchPaidHistory = useCallback(async () => {
+    setLoadingPaid(true);
+    try {
+      const activeCenterId = getCurrentCenterId();
+      const res = await apiClient<ApiFee[]>("/fees", {
+        params: { centerId: activeCenterId, status: "Paid" },
+      });
+      if (res.success && Array.isArray(res.data)) {
+        const rawPaid = res.data;
+        setPaidStudents(rawPaid.map(mapFeeToStudent));
+
+        const totalPaid = rawPaid.reduce(
+          (sum, f) => sum + (Number(f.paidAmount || f.amountDue) || 0),
+          0
+        );
+        setCollectedAmount(totalPaid);
+        setHasLoadedPaid(true);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLoadingPaid(false);
+    }
+  }, []);
+
+  // Fetch active fee data on initial mount (omitting heavy historical paid records)
   const fetchFeesData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const activeCenterId = getCurrentCenterId();
-      const [pendingRes, reviewRes, paidRes] = await Promise.allSettled([
+      const [pendingRes, reviewRes, dashboardRes] = await Promise.allSettled([
         apiClient<ApiFee[]>("/fees", {
           params: { centerId: activeCenterId, status: "Pending" },
         }),
         apiClient<ApiFee[]>("/fees", {
           params: { centerId: activeCenterId, status: "Verification Pending" },
         }),
-        apiClient<ApiFee[]>("/fees", {
-          params: { centerId: activeCenterId, status: "Paid" },
+        apiClient<{ collectedFeesThisMonth?: number }>("/dashboard/owner", {
+          params: { centerId: activeCenterId },
         }),
       ]);
 
@@ -190,18 +219,14 @@ export default function FeesPage() {
         setReviewStudents([]);
       }
 
-      // 3. Paid History (Strictly status === 'Paid')
-      if (paidRes.status === "fulfilled" && paidRes.value.success && Array.isArray(paidRes.value.data)) {
-        const rawPaid = paidRes.value.data;
-        setPaidStudents(rawPaid.map(mapFeeToStudent));
+      // 3. Fast server-side total collection aggregate from dashboard endpoint
+      if (dashboardRes.status === "fulfilled" && dashboardRes.value.success && dashboardRes.value.data) {
+        setCollectedAmount(dashboardRes.value.data.collectedFeesThisMonth || 0);
+      }
 
-        const totalPaid = rawPaid.reduce(
-          (sum, f) => sum + (Number(f.paidAmount || f.amountDue) || 0),
-          0
-        );
-        setCollectedAmount(totalPaid);
-      } else {
-        setPaidStudents([]);
+      // 4. Refresh paid history if it was already loaded before
+      if (hasLoadedPaid) {
+        fetchPaidHistory();
       }
     } catch (err: unknown) {
       const msg =
@@ -210,11 +235,18 @@ export default function FeesPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [hasLoadedPaid, fetchPaidHistory]);
 
   useEffect(() => {
     fetchFeesData();
   }, [fetchFeesData]);
+
+  // Load historical paid records only when the user navigates to the Paid tab
+  useEffect(() => {
+    if (activeTab === "paid" && !hasLoadedPaid && !loadingPaid) {
+      fetchPaidHistory();
+    }
+  }, [activeTab, hasLoadedPaid, loadingPaid, fetchPaidHistory]);
 
   // TASK 1: Ensure TOTAL OVERDUE sum calculation ONLY includes fees where status === 'Pending'.
   // Verification Pending and Advance Payments are strictly excluded!
@@ -493,7 +525,7 @@ export default function FeesPage() {
                   : "bg-slate-200 text-slate-600"
               }`}
             >
-              {paidStudents.length}
+              {hasLoadedPaid ? paidStudents.length : "—"}
             </span>
           </button>
         </div>
@@ -716,15 +748,18 @@ export default function FeesPage() {
                     <div className="flex items-center gap-2">
                       <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold bg-emerald-100 text-emerald-900 border border-emerald-200">
                         <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                        {paidStudents.length} Records Cleared
+                        {hasLoadedPaid ? `${paidStudents.length} Records Cleared` : "Loading..."}
                       </span>
                       <button
-                        onClick={fetchFeesData}
+                        onClick={() => {
+                          fetchFeesData();
+                          fetchPaidHistory();
+                        }}
                         className="tap-bounce text-slate-400 hover:text-slate-600 p-1"
                         title="Reload history"
                         aria-label="Reload history"
                       >
-                        <RefreshCw className="h-3.5 w-3.5" />
+                        <RefreshCw className={`h-3.5 w-3.5 ${loadingPaid ? "animate-spin text-emerald-600" : ""}`} />
                       </button>
                     </div>
                   </div>
@@ -732,7 +767,14 @@ export default function FeesPage() {
 
                 {/* Paid Students List */}
                 <div className="space-y-2.5">
-                  {paidStudents.length > 0 ? (
+                  {loadingPaid && paidStudents.length === 0 ? (
+                    <div className="rounded-3xl border border-slate-100 bg-white p-10 text-center shadow-xs">
+                      <Loader2 className="w-6 h-6 animate-spin text-emerald-600 mx-auto mb-2" />
+                      <p className="text-xs font-semibold text-slate-500">
+                        Loading paid fee records...
+                      </p>
+                    </div>
+                  ) : paidStudents.length > 0 ? (
                     paidStudents.map((student) => (
                       <OverdueStudentItem
                         key={student.id}

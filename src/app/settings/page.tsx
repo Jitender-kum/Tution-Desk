@@ -53,6 +53,43 @@ interface MicroserviceStatus {
   } | string;
 }
 
+/**
+ * Isolated live badge for QR freshness.
+ * Encapsulates the 3-second tick timer so the 1,700-line SettingsPage is not re-rendered every 3s.
+ */
+function QrFreshnessBadge({ qrGeneratedAt }: { qrGeneratedAt?: number | null }) {
+  const [now, setNow] = useState<number>(Date.now());
+
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  if (!qrGeneratedAt) return null;
+
+  const elapsedSeconds = Math.max(0, Math.floor((now - qrGeneratedAt) / 1000));
+
+  return (
+    <div className="mt-3 flex flex-col items-center justify-center gap-1 text-[11px] text-slate-500 font-semibold">
+      <div className="flex items-center gap-1.5">
+        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+        <span>
+          Live QR Code
+          <span className="text-slate-400 font-normal">
+            {" "}• Generated{" "}
+            {elapsedSeconds < 5 ? "just now" : `${elapsedSeconds}s ago`}
+          </span>
+        </span>
+      </div>
+      {elapsedSeconds > 50 && (
+        <span className="text-[10px] text-amber-700 font-medium bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200/80">
+          If scanning shows &quot;Could not link&quot;, click Regenerate below.
+        </span>
+      )}
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const [centerId, setCenterId] = useState<string>("");
   const [statusData, setStatusData] = useState<MicroserviceStatus>({
@@ -66,7 +103,6 @@ export default function SettingsPage() {
   const [isInitializing, setIsInitializing] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [lastPolled, setLastPolled] = useState<Date | null>(null);
-  const [currentTime, setCurrentTime] = useState<number>(Date.now());
   const lastQrTimestampRef = useRef<number>(0);
   const isFetchingRef = useRef<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -92,13 +128,6 @@ export default function SettingsPage() {
       if (abortControllerRef.current) abortControllerRef.current.abort();
     };
   }, []);
-
-  // Periodically refresh current time while QR is displayed to keep freshness counter live
-  useEffect(() => {
-    if (statusData.status !== "qr_ready") return;
-    const interval = setInterval(() => setCurrentTime(Date.now()), 3000);
-    return () => clearInterval(interval);
-  }, [statusData.status]);
 
   const isLocalEnv =
     typeof window !== "undefined" &&
@@ -1075,40 +1104,7 @@ export default function SettingsPage() {
                 level="M"
                 includeMargin={true}
               />
-              <div className="mt-3 flex flex-col items-center justify-center gap-1 text-[11px] text-slate-500 font-semibold">
-                <div className="flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
-                  <span>
-                    Live QR Code
-                    {statusData.qrGeneratedAt && (
-                      <span className="text-slate-400 font-normal">
-                        {" "}• Generated{" "}
-                        {Math.max(
-                          0,
-                          Math.floor(
-                            (currentTime - statusData.qrGeneratedAt) / 1000
-                          )
-                        ) < 5
-                          ? "just now"
-                          : `${Math.max(
-                              0,
-                              Math.floor(
-                                (currentTime - statusData.qrGeneratedAt) / 1000
-                              )
-                            )}s ago`}
-                      </span>
-                    )}
-                  </span>
-                </div>
-                {statusData.qrGeneratedAt &&
-                  Math.floor(
-                    (currentTime - statusData.qrGeneratedAt) / 1000
-                  ) > 50 && (
-                    <span className="text-[10px] text-amber-700 font-medium bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200/80">
-                      If scanning shows &quot;Could not link&quot;, click Regenerate below.
-                    </span>
-                  )}
-              </div>
+              <QrFreshnessBadge qrGeneratedAt={statusData.qrGeneratedAt} />
             </div>
           </div>
 

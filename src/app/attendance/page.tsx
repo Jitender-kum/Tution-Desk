@@ -239,8 +239,8 @@ export default function AttendancePage() {
     try {
       const todayDate = new Date().toISOString();
 
-      // Post attendance record for each marked student
-      await Promise.all(
+      // Post attendance record for each marked student with individual settlement
+      const results = await Promise.allSettled(
         markedStudents.map((s) =>
           apiClient("/attendance", {
             method: "POST",
@@ -255,12 +255,24 @@ export default function AttendancePage() {
         )
       );
 
-      setIsSaved(true);
-      setNotificationToast(
-        absentCount > 0
-          ? `Attendance saved! WhatsApp absentee alerts dispatched to ${absentCount} parent(s).`
-          : `Attendance saved for ${markedStudents.length} student(s)! All parents notified.`
-      );
+      const successfulCount = results.filter((r) => r.status === "fulfilled").length;
+      const failedCount = results.filter((r) => r.status === "rejected").length;
+
+      if (failedCount === 0) {
+        setIsSaved(true);
+        setNotificationToast(
+          absentCount > 0
+            ? `Attendance saved! WhatsApp absentee alerts dispatched to ${absentCount} parent(s).`
+            : `Attendance saved for ${markedStudents.length} student(s)! All parents notified.`
+        );
+      } else if (successfulCount > 0) {
+        setIsSaved(true);
+        setNotificationToast(
+          `Partially saved: ${successfulCount} student(s) saved, ${failedCount} failed. Please retry failed entries.`
+        );
+      } else {
+        throw new Error(`Failed to save attendance records for all ${failedCount} students.`);
+      }
     } catch (err: unknown) {
       const msg =
         err instanceof Error ? err.message : "Failed to save attendance";

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useDeferredValue } from "react";
 import StudentFormModal from "@/components/modals/StudentFormModal";
 import CreateBatchModal from "@/components/modals/CreateBatchModal";
 import { apiClient, getCurrentCenterId } from "@/lib/apiClient";
@@ -90,6 +90,7 @@ export default function AdmissionsPage() {
   const [batches, setBatches] = useState<BatchRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const deferredSearchQuery = useDeferredValue(searchQuery);
   const [selectedBatchFilter, setSelectedBatchFilter] = useState("all");
 
   // Modal States
@@ -150,20 +151,23 @@ export default function AdmissionsPage() {
     return Array.from(set);
   }, [batches, students]);
 
-  // Filter students by search query and batch filter
+  // Filter students by deferred search query and batch filter
   const filteredStudents = useMemo(() => {
+    const query = deferredSearchQuery.trim().toLowerCase();
+    const rawQuery = deferredSearchQuery.trim();
+
     return students.filter((s) => {
       const matchSearch =
-        searchQuery.trim() === "" ||
-        s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        s.parentWhatsApp.includes(searchQuery.trim());
+        query === "" ||
+        s.name.toLowerCase().includes(query) ||
+        s.parentWhatsApp.includes(rawQuery);
 
       const matchBatch =
         selectedBatchFilter === "all" || s.batch === selectedBatchFilter;
 
       return matchSearch && matchBatch;
     });
-  }, [students, searchQuery, selectedBatchFilter]);
+  }, [students, deferredSearchQuery, selectedBatchFilter]);
 
   // Group filtered students by Batch
   const groupedStudents = useMemo(() => {
