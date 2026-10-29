@@ -5,7 +5,7 @@ import { useSetHeader } from "@/components/layout/HeaderContext";
 import FeesSummaryHeroCard from "@/components/fees/FeesSummaryHeroCard";
 import GlobalReminderButton from "@/components/fees/GlobalReminderButton";
 import OverdueStudentItem from "@/components/fees/OverdueStudentItem";
-import { apiClient, getCurrentCenterId } from "@/lib/apiClient";
+import { apiClient, getCurrentCenterId, getApiCache } from "@/lib/apiClient";
 import { OverdueFeeStudent } from "@/types";
 import {
   CheckCircle2,
@@ -129,11 +129,22 @@ export default function FeesPage() {
   // Tab Navigation State
   const [activeTab, setActiveTab] = useState<FeeTab>("pending");
 
+  const activeCenterId = typeof window !== "undefined" ? getCurrentCenterId() : "";
+  const cachedPending = getApiCache<ApiFee[]>("/fees", { centerId: activeCenterId, status: "Pending" });
+  const cachedReview = getApiCache<ApiFee[]>("/fees", { centerId: activeCenterId, status: "Verification Pending" });
+  const cachedDashboard = getApiCache<{ collectedFeesThisMonth?: number }>("/dashboard/owner", { centerId: activeCenterId });
+
   // Data lists strictly separated by status
-  const [pendingStudents, setPendingStudents] = useState<OverdueFeeStudent[]>([]);
-  const [reviewStudents, setReviewStudents] = useState<OverdueFeeStudent[]>([]);
+  const [pendingStudents, setPendingStudents] = useState<OverdueFeeStudent[]>(
+    () => (cachedPending?.data ? cachedPending.data.map(mapFeeToStudent) : [])
+  );
+  const [reviewStudents, setReviewStudents] = useState<OverdueFeeStudent[]>(
+    () => (cachedReview?.data ? cachedReview.data.map(mapFeeToStudent) : [])
+  );
   const [paidStudents, setPaidStudents] = useState<OverdueFeeStudent[]>([]);
-  const [collectedAmount, setCollectedAmount] = useState<number>(0);
+  const [collectedAmount, setCollectedAmount] = useState<number>(
+    () => cachedDashboard?.data?.collectedFeesThisMonth || 0
+  );
   const [loadingPaid, setLoadingPaid] = useState<boolean>(false);
   const [hasLoadedPaid, setHasLoadedPaid] = useState<boolean>(false);
 
@@ -148,7 +159,7 @@ export default function FeesPage() {
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !cachedPending && !cachedReview);
   const [error, setError] = useState<string | null>(null);
 
   // Synchronize dynamic badge count with persistent TopHeader
@@ -162,12 +173,13 @@ export default function FeesPage() {
   });
 
   // Lazy fetch historical paid records on demand
-  const fetchPaidHistory = useCallback(async () => {
+  const fetchPaidHistory = useCallback(async (isRefresh = false) => {
     setLoadingPaid(true);
     try {
-      const activeCenterId = getCurrentCenterId();
+      const activeId = getCurrentCenterId();
       const res = await apiClient<ApiFee[]>("/fees", {
-        params: { centerId: activeCenterId, status: "Paid" },
+        params: { centerId: activeId, status: "Paid" },
+        skipCache: isRefresh,
       });
       if (res.success && Array.isArray(res.data)) {
         const rawPaid = res.data;
@@ -188,34 +200,39 @@ export default function FeesPage() {
   }, []);
 
   // Fetch active fee data on initial mount (omitting heavy historical paid records)
-  const fetchFeesData = useCallback(async () => {
-    setLoading(true);
+  const fetchFeesData = useCallback(async (isRefresh = false) => {
+    if (isRefresh || (!cachedPending && !cachedReview)) {
+      setLoading(true);
+    }
     setError(null);
     try {
-      const activeCenterId = getCurrentCenterId();
+      const activeId = getCurrentCenterId();
       const [pendingRes, reviewRes, dashboardRes] = await Promise.allSettled([
         apiClient<ApiFee[]>("/fees", {
-          params: { centerId: activeCenterId, status: "Pending" },
+          params: { centerId: activeId, status: "Pending" },
+          skipCache: isRefresh,
         }),
         apiClient<ApiFee[]>("/fees", {
-          params: { centerId: activeCenterId, status: "Verification Pending" },
+          params: { centerId: activeId, status: "Verification Pending" },
+          skipCache: isRefresh,
         }),
         apiClient<{ collectedFeesThisMonth?: number }>("/dashboard/owner", {
-          params: { centerId: activeCenterId },
+          params: { centerId: activeId },
+          skipCache: isRefresh,
         }),
       ]);
 
       // 1. Pending Dues (Strictly status === 'Pending')
       if (pendingRes.status === "fulfilled" && pendingRes.value.success && Array.isArray(pendingRes.value.data)) {
         setPendingStudents(pendingRes.value.data.map(mapFeeToStudent));
-      } else {
+      } else if (isRefresh || !cachedPending) {
         setPendingStudents([]);
       }
 
       // 2. Awaiting Review (Strictly status === 'Verification Pending')
       if (reviewRes.status === "fulfilled" && reviewRes.value.success && Array.isArray(reviewRes.value.data)) {
         setReviewStudents(reviewRes.value.data.map(mapFeeToStudent));
-      } else {
+      } else if (isRefresh || !cachedReview) {
         setReviewStudents([]);
       }
 
@@ -226,7 +243,7 @@ export default function FeesPage() {
 
       // 4. Refresh paid history if it was already loaded before
       if (hasLoadedPaid) {
-        fetchPaidHistory();
+        fetchPaidHistory(isRefresh);
       }
     } catch (err: unknown) {
       const msg =
@@ -235,7 +252,7 @@ export default function FeesPage() {
     } finally {
       setLoading(false);
     }
-  }, [hasLoadedPaid, fetchPaidHistory]);
+  }, [hasLoadedPaid, fetchPaidHistory, cachedPending, cachedReview]);
 
   useEffect(() => {
     fetchFeesData();
@@ -446,7 +463,7 @@ export default function FeesPage() {
               <p className="font-bold">Backend Connection Issue</p>
               <p className="mt-0.5 text-rose-700">{error}</p>
               <button
-                onClick={fetchFeesData}
+                onClick={() => fetchFeesData(true)}
                 className="mt-2 font-bold underline text-rose-900 hover:text-rose-950"
               >
                 Click here to retry
@@ -601,7 +618,7 @@ export default function FeesPage() {
                   </div>
 
                   <button
-                    onClick={fetchFeesData}
+                    onClick={() => fetchFeesData(true)}
                     className="tap-bounce text-slate-400 hover:text-slate-600 p-1"
                     title="Reload fees"
                     aria-label="Reload fees"
@@ -680,7 +697,7 @@ export default function FeesPage() {
                         {reviewStudents.length} {reviewStudents.length === 1 ? "Payment" : "Payments"} Awaiting Approval
                       </span>
                       <button
-                        onClick={fetchFeesData}
+                        onClick={() => fetchFeesData(true)}
                         className="tap-bounce text-slate-400 hover:text-slate-600 p-1"
                         title="Reload verifications"
                         aria-label="Reload verifications"

@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useDeferredValue } from "react";
 import CreateTestModal from "@/components/modals/CreateTestModal";
 import EnterMarksModal from "@/components/modals/EnterMarksModal";
-import { apiClient, getCurrentCenterId } from "@/lib/apiClient";
+import { apiClient, getCurrentCenterId, getApiCache } from "@/lib/apiClient";
 import { TestRecord, BatchRecord } from "@/types";
 import {
   FileText,
@@ -33,9 +33,18 @@ function formatTestDate(dateStr?: string): string {
 }
 
 export default function TestsPage() {
-  const [tests, setTests] = useState<TestRecord[]>([]);
-  const [batches, setBatches] = useState<BatchRecord[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cachedTests =
+    getApiCache<TestRecord[]>("/tests", {
+      centerId: typeof window !== "undefined" ? getCurrentCenterId() : "",
+    }) || getApiCache<TestRecord[]>("/tests");
+  const cachedBatches =
+    getApiCache<BatchRecord[]>("/batches", {
+      centerId: typeof window !== "undefined" ? getCurrentCenterId() : "",
+    }) || getApiCache<BatchRecord[]>("/batches");
+
+  const [tests, setTests] = useState<TestRecord[]>(() => cachedTests?.data || []);
+  const [batches, setBatches] = useState<BatchRecord[]>(() => cachedBatches?.data || []);
+  const [loading, setLoading] = useState(() => !cachedTests && !cachedBatches);
   const [selectedBatchFilter, setSelectedBatchFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
   const deferredSearchQuery = useDeferredValue(searchQuery);
@@ -56,10 +65,11 @@ export default function TestsPage() {
   };
 
   // Fetch tests from backend
-  const fetchTests = useCallback(async () => {
+  const fetchTests = useCallback(async (isRefresh = false) => {
     try {
       const res = await apiClient<TestRecord[]>("/tests", {
         params: { centerId: getCurrentCenterId() },
+        skipCache: isRefresh,
       });
       setTests(res.data || []);
     } catch (err) {
@@ -68,10 +78,11 @@ export default function TestsPage() {
   }, []);
 
   // Fetch batches from backend
-  const fetchBatches = useCallback(async () => {
+  const fetchBatches = useCallback(async (isRefresh = false) => {
     try {
       const res = await apiClient<BatchRecord[]>("/batches", {
         params: { centerId: getCurrentCenterId() },
+        skipCache: isRefresh,
       });
       setBatches(res.data || []);
     } catch (err) {
@@ -81,12 +92,14 @@ export default function TestsPage() {
 
   useEffect(() => {
     async function loadData() {
-      setLoading(true);
+      if (!cachedTests && !cachedBatches) {
+        setLoading(true);
+      }
       await Promise.all([fetchTests(), fetchBatches()]);
       setLoading(false);
     }
     loadData();
-  }, [fetchTests, fetchBatches]);
+  }, [fetchTests, fetchBatches, cachedTests, cachedBatches]);
 
   // Extract all unique batch names
   const allBatchNames = useMemo(() => {

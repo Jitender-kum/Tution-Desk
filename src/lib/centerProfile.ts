@@ -1,4 +1,4 @@
-import { getCurrentCenterId } from "./apiClient";
+import { getCurrentCenterId, clearApiCache } from "./apiClient";
 
 export interface CenterInfo {
   name: string;
@@ -87,4 +87,5 @@ export function clearCachedCenter(): void {
   cacheEpoch++;
   cachedCenter = null;
   centerPromise = null;
+  clearApiCache();
 }

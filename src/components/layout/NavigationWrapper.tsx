@@ -26,7 +26,9 @@ export default function NavigationWrapper({
     <HeaderProvider>
       <div className="w-full max-w-md sm:max-w-2xl md:max-w-4xl lg:max-w-5xl min-h-screen bg-[var(--bg-app)] flex flex-col relative shadow-xl border-x border-slate-200/60 pb-20">
         <TopHeader />
-        <main className="flex-1 overflow-y-auto">{children}</main>
+        <main key={pathname} className="flex-1 overflow-y-auto route-transition">
+          {children}
+        </main>
         <BottomNav />
       </div>
     </HeaderProvider>

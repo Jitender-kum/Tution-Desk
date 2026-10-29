@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useDeferredValue } from "react";
 import StudentFormModal from "@/components/modals/StudentFormModal";
 import CreateBatchModal from "@/components/modals/CreateBatchModal";
-import { apiClient, getCurrentCenterId } from "@/lib/apiClient";
+import { apiClient, getCurrentCenterId, getApiCache } from "@/lib/apiClient";
 import { StudentRecord, BatchRecord } from "@/types";
 import Link from "next/link";
 import {
@@ -86,9 +86,24 @@ function getCycleOrdinal(day: number): string {
 }
 
 export default function AdmissionsPage() {
-  const [students, setStudents] = useState<StudentRecord[]>([]);
-  const [batches, setBatches] = useState<BatchRecord[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cachedStudents =
+    getApiCache<StudentRecord[]>("/students", {
+      centerId: typeof window !== "undefined" ? getCurrentCenterId() : "",
+    }) || getApiCache<StudentRecord[]>("/students");
+  const cachedBatches =
+    getApiCache<BatchRecord[]>("/batches", {
+      centerId: typeof window !== "undefined" ? getCurrentCenterId() : "",
+    }) || getApiCache<BatchRecord[]>("/batches");
+
+  const [students, setStudents] = useState<StudentRecord[]>(
+    () => cachedStudents?.data || []
+  );
+  const [batches, setBatches] = useState<BatchRecord[]>(
+    () => cachedBatches?.data || []
+  );
+  const [loading, setLoading] = useState(
+    () => !cachedStudents && !cachedBatches
+  );
   const [searchQuery, setSearchQuery] = useState("");
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const [selectedBatchFilter, setSelectedBatchFilter] = useState("all");
@@ -109,10 +124,11 @@ export default function AdmissionsPage() {
   };
 
   // Fetch real students from MongoDB backend
-  const fetchStudents = useCallback(async () => {
+  const fetchStudents = useCallback(async (isRefresh = false) => {
     try {
       const res = await apiClient<StudentRecord[]>("/students", {
         params: { centerId: getCurrentCenterId() },
+        skipCache: isRefresh,
       });
       setStudents(res.data || []);
     } catch (err) {
@@ -121,10 +137,11 @@ export default function AdmissionsPage() {
   }, []);
 
   // Fetch real batches from MongoDB backend
-  const fetchBatches = useCallback(async () => {
+  const fetchBatches = useCallback(async (isRefresh = false) => {
     try {
       const res = await apiClient<BatchRecord[]>("/batches", {
         params: { centerId: getCurrentCenterId() },
+        skipCache: isRefresh,
       });
       setBatches(res.data || []);
     } catch (err) {
@@ -134,12 +151,14 @@ export default function AdmissionsPage() {
 
   useEffect(() => {
     async function loadInitialData() {
-      setLoading(true);
+      if (!cachedStudents && !cachedBatches) {
+        setLoading(true);
+      }
       await Promise.all([fetchStudents(), fetchBatches()]);
       setLoading(false);
     }
     loadInitialData();
-  }, [fetchStudents, fetchBatches]);
+  }, [fetchStudents, fetchBatches, cachedStudents, cachedBatches]);
 
   // Extract all unique batch names
   const uniqueBatches = useMemo(() => {

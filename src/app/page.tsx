@@ -8,7 +8,7 @@ import StatsRow from "@/components/dashboard/StatsRow";
 import QuickActions from "@/components/dashboard/QuickActions";
 import TodayScheduleTimeline from "@/components/dashboard/TodayScheduleTimeline";
 import RecentActivityCard from "@/components/dashboard/RecentActivityCard";
-import { apiClient } from "@/lib/apiClient";
+import { apiClient, getApiCache } from "@/lib/apiClient";
 import {
   DashboardMetrics,
   QuickBatchAttendance,
@@ -45,7 +45,9 @@ function formatRelativeTime(dateString?: string): string {
 }
 
 export default function DashboardPage() {
-  const [loading, setLoading] = useState(true);
+  const cachedDashboard = getApiCache<OwnerDashboardData>("/dashboard/owner");
+
+  const [loading, setLoading] = useState(() => !cachedDashboard);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,34 +57,76 @@ export default function DashboardPage() {
     tagline: "Excellence in Coaching & Mentorship",
   });
 
-  const [metrics, setMetrics] = useState<DashboardMetrics>({
-    collectedFeesThisMonth: 0,
-    pendingFeesTotal: 0,
-    totalActiveStudents: 0,
-    totalBatchesToday: 0,
-    pendingTestsCount: 0,
-    newEnquiriesCount: 0,
-    attendanceTodayPercentage: 100,
-    overdueCount: 0,
-    todayAttendance: 0,
+  const [metrics, setMetrics] = useState<DashboardMetrics>(() => {
+    if (cachedDashboard?.data) {
+      const d = cachedDashboard.data;
+      return {
+        collectedFeesThisMonth: d.collectedFeesThisMonth || 0,
+        pendingFeesTotal: d.pendingFeesTotal || 0,
+        totalActiveStudents: d.totalStudents || 0,
+        totalBatchesToday: d.totalBatches || 0,
+        pendingTestsCount: d.pendingTestsCount || 0,
+        newEnquiriesCount: d.totalStudents || 0,
+        attendanceTodayPercentage: d.attendanceTodayPercentage ?? 100,
+        overdueCount: d.overdueCount || 0,
+        todayAttendance: d.todayAttendance || 0,
+      };
+    }
+    return {
+      collectedFeesThisMonth: 0,
+      pendingFeesTotal: 0,
+      totalActiveStudents: 0,
+      totalBatchesToday: 0,
+      pendingTestsCount: 0,
+      newEnquiriesCount: 0,
+      attendanceTodayPercentage: 100,
+      overdueCount: 0,
+      todayAttendance: 0,
+    };
   });
 
   const [isSendingReminders, setIsSendingReminders] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [batches, setBatches] = useState<QuickBatchAttendance[]>([]);
-  const [activities, setActivities] = useState<RecentActivityItem[]>([]);
+  const [batches, setBatches] = useState<QuickBatchAttendance[]>(() => {
+    if (cachedDashboard?.data?.batches) {
+      return cachedDashboard.data.batches.map((b, idx) => ({
+        id: b.id || `batch_${idx + 1}`,
+        batchName: b.batchName || "Batch",
+        subject: b.subject || "Regular Session",
+        timeSlot: (b as any).timing || b.timeSlot || "05:00 PM - 06:15 PM",
+        room: b.room || `Room ${idx + 1}`,
+        totalStudents: b.totalStudents || 0,
+        markedStudents: b.markedStudents || 0,
+        status: b.status || "pending",
+        timelineStatus: idx === 0 ? "ongoing" : "upcoming",
+      }));
+    }
+    return [];
+  });
+  const [activities, setActivities] = useState<RecentActivityItem[]>(() => {
+    if (cachedDashboard?.data?.recentActivities) {
+      return cachedDashboard.data.recentActivities.map((a) => ({
+        ...a,
+        time: formatRelativeTime(a.time),
+      }));
+    }
+    return [];
+  });
 
   const fetchDashboardData = useCallback(async (isRefresh = false) => {
     if (isRefresh) {
       setRefreshing(true);
     } else {
-      setLoading(true);
+      // Only show full skeleton if we have no cached data to display
+      setLoading((prev) => (cachedDashboard ? false : prev));
     }
     setError(null);
 
     try {
       // 1. Fetch real aggregated metrics from the dedicated Owner Dashboard API
-      const dashboardRes = await apiClient<OwnerDashboardData>("/dashboard/owner");
+      const dashboardRes = await apiClient<OwnerDashboardData>("/dashboard/owner", {
+        skipCache: isRefresh,
+      });
 
       if (dashboardRes.success && dashboardRes.data) {
         const d = dashboardRes.data;

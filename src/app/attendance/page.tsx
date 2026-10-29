@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import AttendanceHeader from "@/components/attendance/AttendanceHeader";
 import StudentAttendanceRow from "@/components/attendance/StudentAttendanceRow";
 import StickySaveBar from "@/components/attendance/StickySaveBar";
-import { apiClient, getCurrentCenterId } from "@/lib/apiClient";
+import { apiClient, getCurrentCenterId, getApiCache } from "@/lib/apiClient";
 import {
   AttendanceStatus,
   QuickBatchAttendance,
@@ -40,12 +40,39 @@ function getInitials(name: string): string {
 }
 
 export default function AttendancePage() {
-  const [allStudents, setAllStudents] = useState<ApiStudent[]>([]);
-  const [selectedBatchId, setSelectedBatchId] = useState<string>("");
+  const cachedStudents =
+    getApiCache<ApiStudent[]>("/students", {
+      centerId: typeof window !== "undefined" ? getCurrentCenterId() : "",
+    }) || getApiCache<ApiStudent[]>("/students");
+
+  const [allStudents, setAllStudents] = useState<ApiStudent[]>(
+    () => cachedStudents?.data || []
+  );
+  const [selectedBatchId, setSelectedBatchId] = useState<string>(() => {
+    if (cachedStudents?.data && cachedStudents.data.length > 0) {
+      const uniqueBatches = Array.from(
+        new Set(cachedStudents.data.map((s) => s.batch).filter(Boolean))
+      );
+      return uniqueBatches[0] || "Default Batch";
+    }
+    return "";
+  });
   const [attendanceMap, setAttendanceMap] = useState<
     Record<string, AttendanceStatus>
-  >({});
-  const [loading, setLoading] = useState(true);
+  >(() => {
+    if (cachedStudents?.data && cachedStudents.data.length > 0) {
+      const initialBatch = cachedStudents.data[0]?.batch;
+      const initialMap: Record<string, AttendanceStatus> = {};
+      cachedStudents.data
+        .filter((s) => s.batch === initialBatch)
+        .forEach((s) => {
+          initialMap[s._id] = "unmarked";
+        });
+      return initialMap;
+    }
+    return {};
+  });
+  const [loading, setLoading] = useState(() => !cachedStudents);
   const [saving, setSaving] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
   const [notificationToast, setNotificationToast] = useState<string | null>(
@@ -66,12 +93,15 @@ export default function AttendancePage() {
   }, []);
 
   // Fetch all students from backend
-  const fetchStudents = useCallback(async () => {
-    setLoading(true);
+  const fetchStudents = useCallback(async (isRefresh = false) => {
+    if (isRefresh || !cachedStudents) {
+      setLoading(true);
+    }
     setError(null);
     try {
       const res = await apiClient<ApiStudent[]>("/students", {
         params: { centerId: getCurrentCenterId() },
+        skipCache: isRefresh,
       });
 
       const students = res.data || [];
@@ -107,7 +137,7 @@ export default function AttendancePage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [cachedStudents]);
 
   useEffect(() => {
     fetchStudents();
@@ -314,7 +344,7 @@ export default function AttendancePage() {
               <p className="font-bold">Failed to load students</p>
               <p className="mt-0.5 text-rose-700">{error}</p>
               <button
-                onClick={fetchStudents}
+                onClick={() => fetchStudents(true)}
                 className="mt-2 font-bold underline text-rose-900 hover:text-rose-950"
               >
                 Click here to retry
@@ -346,7 +376,7 @@ export default function AttendancePage() {
             </span>
           </div>
           <button
-            onClick={fetchStudents}
+            onClick={() => fetchStudents(true)}
             className="tap-bounce text-slate-400 hover:text-slate-600 p-1"
             title="Reload students"
             aria-label="Reload students"
