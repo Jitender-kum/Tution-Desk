@@ -18,12 +18,22 @@ export async function GET(request: NextRequest) {
   try {
     await connectDB();
 
-    // 1. Extract centerId from verified session (cookie, bearer token, or headers/params fallback)
+    // 1. Extract centerId strictly from verified session (cookie or bearer token)
     const verifiedCenterId = await getAuthenticatedCenterId(request);
-    const centerId =
-      verifiedCenterId ||
-      request.nextUrl.searchParams.get("centerId") ||
-      request.headers.get("x-center-id");
+    let centerId = verifiedCenterId;
+
+    if (!centerId) {
+      if (process.env.NODE_ENV === "production") {
+        return NextResponse.json(
+          { success: false, error: "Authentication required to access dashboard" },
+          { status: 401, headers: corsHeaders }
+        );
+      }
+      // Non-production fallback for local development/testing only
+      centerId =
+        request.nextUrl.searchParams.get("centerId") ||
+        request.headers.get("x-center-id");
+    }
 
     if (!centerId) {
       return NextResponse.json(

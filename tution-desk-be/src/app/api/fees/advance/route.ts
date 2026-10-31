@@ -42,11 +42,11 @@ export async function POST(request: NextRequest) {
       `ADV_INIT_${Date.now().toString().slice(-6)}`;
 
     // Determine target centerId
-    let targetCenterId = centerId ? String(centerId).trim() : null;
-    if (!targetCenterId) {
-      const authCenterId = await getAuthenticatedCenterId(request);
-      targetCenterId = authCenterId || request.headers.get("x-center-id");
-    }
+    const authCenterId = await getAuthenticatedCenterId(request);
+    let targetCenterId =
+      authCenterId ||
+      (centerId ? String(centerId).trim() : null) ||
+      request.headers.get("x-center-id");
 
     // Lookup student to get centerId if still missing
     const studentDoc = await Student.findById(studentId);
@@ -54,6 +54,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { success: false, error: "Student record not found" },
         { status: 404, headers: corsHeaders }
+      );
+    }
+
+    // Center-level data isolation guard
+    if (authCenterId && studentDoc.centerId !== authCenterId) {
+      return NextResponse.json(
+        { success: false, error: "Unauthorized access to student outside authenticated center" },
+        { status: 403, headers: corsHeaders }
       );
     }
 
@@ -71,6 +79,8 @@ export async function POST(request: NextRequest) {
       dueDate: new Date(),
       status: "Verification Pending",
       paymentMode: "Online/UPI",
+      feeType: "advance",
+      isAdvance: true,
       utrNumber: trimmedUtr,
       paymentDate: new Date(),
     });

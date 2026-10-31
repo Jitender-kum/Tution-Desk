@@ -31,6 +31,7 @@ export interface ApiResponse<T = unknown> {
   success: boolean;
   data: T;
   error?: string;
+  code?: string;
 }
 
 export interface RequestOptions extends Omit<RequestInit, "body"> {
@@ -55,7 +56,7 @@ interface CacheEntry<T> {
 
 // In-memory short-lived cache and in-flight request deduplication map
 const apiCache = new Map<string, CacheEntry<unknown>>();
-const inFlightRequests = new Map<string, Promise<ApiResponse<any>>>();
+const inFlightRequests = new Map<string, Promise<ApiResponse<unknown>>>();
 
 /**
  * Builds a deterministic cache key scoped by active center ID and sorted query parameters.
@@ -238,7 +239,13 @@ export async function apiClient<T = unknown>(
       const json = (await response.json()) as ApiResponse<T>;
 
       if (!response.ok || !json.success) {
-        throw new Error(json.error || `Request failed with status ${response.status}`);
+        const error = new Error(json.error || `Request failed with status ${response.status}`) as Error & {
+          code?: string;
+          status?: number;
+        };
+        error.code = json.code;
+        error.status = response.status;
+        throw error;
       }
 
       // If GET was successful and cacheable, save to client cache

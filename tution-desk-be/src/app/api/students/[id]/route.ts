@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import connectDB from "@/lib/db";
 import Student from "@/models/Student";
+import Fee from "@/models/Fee";
+import Attendance from "@/models/Attendance";
+import Test from "@/models/Test";
+import { getAuthenticatedCenterId } from "@/lib/auth";
 
 export async function OPTIONS() {
   return new NextResponse(null, { status: 200 });
@@ -121,17 +125,85 @@ export async function DELETE(
       );
     }
 
-    const deleted = await Student.findByIdAndDelete(id);
+    const student = await Student.findById(id);
 
-    if (!deleted) {
+    if (!student) {
       return NextResponse.json(
         { success: false, error: "Student not found" },
         { status: 404 }
       );
     }
 
+    const authCenterId = await getAuthenticatedCenterId(request);
+
+    if (!authCenterId) {
+      return NextResponse.json(
+        { success: false, error: "Authentication required" },
+        { status: 401 }
+      );
+    }
+
+    if (student.centerId !== authCenterId) {
+      return NextResponse.json(
+        { success: false, error: "Unauthorized: student belongs to another center" },
+        { status: 403 }
+      );
+    }
+
+    // 1. Guard against removing students with unresolved Pending, Verification Pending, or Partial Paid dues
+    const unresolvedDuesCount = await Fee.countDocuments({
+      studentId: student._id,
+      centerId: student.centerId,
+      status: { $in: ["Pending", "Verification Pending", "Partial Paid"] },
+    });
+
+    if (unresolvedDuesCount > 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Cannot remove student: ${unresolvedDuesCount} active fee obligation(s) exist. Settle or cancel pending dues before removing.`,
+          code: "UNRESOLVED_FEES_EXIST",
+          unresolvedCount: unresolvedDuesCount,
+        },
+        { status: 409 }
+      );
+    }
+
+    // 2. Check if historical fee, attendance, or test records exist
+    const [hasFees, hasAttendance, hasTests] = await Promise.all([
+      Fee.exists({ studentId: student._id, centerId: student.centerId }),
+      Attendance.exists({ studentId: student._id, centerId: student.centerId }),
+      Test.exists({ centerId: student.centerId, "results.studentId": student._id }),
+    ]);
+
+    const hasHistoricalRecords = Boolean(hasFees || hasAttendance || hasTests);
+
+    if (hasHistoricalRecords) {
+      // Soft-deactivate student to preserve receipts, attendance, and academic history
+      student.isActive = false;
+      await student.save();
+
+      return NextResponse.json(
+        {
+          success: true,
+          action: "deactivated",
+          message:
+            "Student deactivated and archived. Historical fee receipts, attendance, and test records preserved.",
+          data: student,
+        },
+        { status: 200 }
+      );
+    }
+
+    // 3. Clean hard-delete if zero historical dependencies exist
+    await Student.findByIdAndDelete(id);
+
     return NextResponse.json(
-      { success: true, message: "Student deleted successfully" },
+      {
+        success: true,
+        action: "deleted",
+        message: "Student deleted successfully",
+      },
       { status: 200 }
     );
   } catch (error: unknown) {

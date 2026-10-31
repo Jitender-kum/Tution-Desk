@@ -3,8 +3,8 @@ import connectDB from "@/lib/db";
 import Fee from "@/models/Fee";
 import "@/models/Student"; // Register Student model for population
 import { getAuthenticatedCenterId } from "@/lib/auth";
-import { sendFeeReminder } from "@/lib/whatsappService";
 import { getCorsHeaders, handleCorsPreflight } from "@/lib/cors";
+import { dispatchFeeReminder } from "@/lib/reminderService";
 
 export async function OPTIONS(request: NextRequest) {
   return handleCorsPreflight(request, "POST, OPTIONS");
@@ -33,48 +33,38 @@ export async function POST(request: NextRequest) {
 
     const cleanCenterId = String(centerId).trim();
 
-    // Fetch all fees where status === 'Pending' for this centerId, populate studentId
+    // Fetch all fees where status is 'Pending' or 'Partial Paid' with remaining due for this centerId, populate studentId
     const pendingFees = await Fee.find({
       centerId: cleanCenterId,
-      status: "Pending",
+      status: { $in: ["Pending", "Partial Paid"] },
+      amountDue: { $gt: 0 },
     }).populate("studentId");
-
-    const appUrl =
-      process.env.NEXT_PUBLIC_APP_URL ||
-      process.env.APP_URL ||
-      "http://localhost:3000";
 
     let sentCount = 0;
     let simulatedCount = 0;
     const dispatchResults = [];
 
-    // Loop through the pending fees and call sendFeeReminder
+    // Loop through the pending fees and call dispatchFeeReminder
     for (const fee of pendingFees) {
       const student = fee.studentId as any;
       if (!student) continue;
 
+      // Inactive students are strictly excluded from automated bulk reminders
+      if (student.isActive === false) continue;
+      if (fee.reminderPaused) continue;
+
       const parentPhone = student.parentWhatsApp;
       const studentName = student.name || "Student";
-      const amountDue = fee.amountDue || 0;
-      const formattedDueDate = fee.dueDate
-        ? new Date(fee.dueDate).toLocaleDateString("en-IN", {
-            day: "numeric",
-            month: "short",
-            year: "numeric",
-          })
-        : "Immediate";
-      const magicLink = student._id ? `${appUrl}/p/${student._id}` : "";
 
       if (parentPhone) {
         try {
-          const res = await sendFeeReminder(
-            cleanCenterId,
-            parentPhone,
-            studentName,
-            amountDue,
-            formattedDueDate,
-            magicLink
-          );
+          const res = await dispatchFeeReminder({
+            feeId: fee._id,
+            centerId: cleanCenterId,
+            triggerType: "manual_owner_bulk",
+            forceOverride: Boolean(body.forceOverride),
+            overrideReason: body.overrideReason,
+          });
 
           if (res.success && !res.simulated) {
             sentCount++;
@@ -87,16 +77,29 @@ export async function POST(request: NextRequest) {
             studentName,
             phone: parentPhone,
             success: res.success,
-            simulated: res.simulated,
-            accepted: res.accepted,
-            delivered: res.delivered,
-            error: res.error,
+            simulated: Boolean(res.simulated),
+            status: res.status,
+            accepted: res.status === "provider_accepted",
+            delivered: false, // Never falsely report provider acceptance as confirmed delivery
+            error: res.message,
+            code: res.code,
           });
-        } catch (err) {
+        } catch (err: unknown) {
+          const errMsg = err instanceof Error ? err.message : "Dispatch error";
           console.error(
             `[REMIND-ALL ERROR] Failed sending to parent of ${studentName}:`,
             err
           );
+          dispatchResults.push({
+            feeId: String(fee._id),
+            studentName,
+            phone: parentPhone,
+            success: false,
+            simulated: false,
+            accepted: false,
+            delivered: false,
+            error: errMsg,
+          });
         }
       }
     }

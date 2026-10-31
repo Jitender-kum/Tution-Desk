@@ -1,8 +1,9 @@
 import connectDB from "./db.ts";
 import Student from "../models/Student.ts";
 import type { IStudentDocument } from "../models/Student.ts";
-import Fee from "../models/Fee.ts";
 import type { IFeeDocument } from "../models/Fee.ts";
+import { generateOrGetMonthlyFee } from "./feeService.ts";
+import { getISTDateComponents } from "./dateUtils.ts";
 
 export interface FeeGenerationOptions {
   overrideDay?: number;
@@ -33,7 +34,8 @@ export interface FeeGenerationResult {
  * Auto-Fee Generator Engine
  * Generates recurring monthly fees for active students based on billingCycleDate
  * or forces generation for all active students when forceAllStudents is true.
- * Ensures strict idempotency: skips students who already have a Fee record for the target month.
+ * Uses shared idempotent feeService for canonical YYYY-MM keying, mid-month joiner protection,
+ * and center due-date offsets.
  */
 export async function generateMonthlyFees(
   options: FeeGenerationOptions = {}
@@ -41,18 +43,10 @@ export async function generateMonthlyFees(
   await connectDB();
 
   const now = options.referenceDate || new Date();
+  const dateComp = getISTDateComponents(now);
 
-  // Target month and year string, e.g., "Oct 2026"
-  const currentMonthString = now.toLocaleDateString("en-IN", {
-    month: "short",
-    year: "numeric",
-  });
-
-  // Calculate default due date: reference date + 5 days
-  const dueDate = new Date(now);
-  dueDate.setDate(dueDate.getDate() + 5);
-
-  const cycleDay = options.overrideDay !== undefined ? options.overrideDay : now.getDate();
+  const cycleDay =
+    options.overrideDay !== undefined ? options.overrideDay : dateComp.day;
 
   // Build query for eligible students
   const studentQuery: Record<string, unknown> = {
@@ -79,53 +73,35 @@ export async function generateMonthlyFees(
   const skippedRecords: SkippedFeeRecord[] = [];
 
   for (const student of eligibleStudents) {
-    // 1. Idempotency Check: Check if fee already exists for this student for the target month
-    const existingFee = await Fee.findOne({
+    const res = await generateOrGetMonthlyFee({
       centerId: student.centerId,
       studentId: student._id,
-      month: currentMonthString,
+      referenceDate: now,
+      isManual: false,
     });
 
-    if (existingFee) {
+    if (res.wasCreated && res.fee) {
+      generatedFeeRecords.push(res.fee);
+      generatedCount++;
+    } else {
       skippedCount++;
+      const reason =
+        res.conflictReason ||
+        (res.fee
+          ? `Fee already exists for ${dateComp.shortMonthLabel} (Fee ID: ${res.fee._id}, Status: ${res.fee.status})`
+          : res.error || "Ineligible for monthly billing");
+
       skippedRecords.push({
         studentId: student._id.toString(),
         studentName: student.name,
-        reason: `Fee already exists for ${currentMonthString} (Fee ID: ${existingFee._id}, Status: ${existingFee.status})`,
+        reason,
       });
-      continue;
     }
-
-    // 2. Fee Amount Validation
-    const feeAmount = student.monthlyFee !== undefined ? student.monthlyFee : 0;
-    if (feeAmount <= 0) {
-      skippedCount++;
-      skippedRecords.push({
-        studentId: student._id.toString(),
-        studentName: student.name,
-        reason: `Monthly fee rate is 0 or unassigned (Fee: ₹${feeAmount})`,
-      });
-      continue;
-    }
-
-    // 3. Create new recurring pending fee record
-    const newFee = (await Fee.create({
-      centerId: student.centerId,
-      studentId: student._id,
-      month: currentMonthString,
-      title: `${currentMonthString} Tuition Fee`,
-      amountDue: feeAmount,
-      dueDate,
-      status: "Pending",
-    })) as IFeeDocument;
-
-    generatedFeeRecords.push(newFee);
-    generatedCount++;
   }
 
   return {
     success: true,
-    month: currentMonthString,
+    month: dateComp.shortMonthLabel,
     cycleDay: options.forceAllStudents ? "FORCED_ALL" : cycleDay,
     totalEligibleStudents: eligibleStudents.length,
     generatedCount,

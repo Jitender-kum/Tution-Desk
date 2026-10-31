@@ -25,6 +25,23 @@ interface StudentOption {
   batch: string;
 }
 
+function getCanonicalBillingMonth(monthStr: string, dueDateStr: string): string {
+  const trimmed = monthStr.trim();
+  if (/^\d{4}-\d{2}$/.test(trimmed)) {
+    return trimmed;
+  }
+  const parsed = Date.parse(trimmed + " 1");
+  if (!isNaN(parsed)) {
+    const d = new Date(parsed);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  }
+  if (dueDateStr && /^\d{4}-\d{2}/.test(dueDateStr)) {
+    return dueDateStr.slice(0, 7);
+  }
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
+
 export default function AddFeeModal({
   isOpen,
   onClose,
@@ -34,6 +51,8 @@ export default function AddFeeModal({
   const [loadingStudents, setLoadingStudents] = useState(false);
 
   const [studentId, setStudentId] = useState("");
+  const [feeType, setFeeType] = useState<"monthly_recurring" | "adhoc" | "registration">("monthly_recurring");
+  const [title, setTitle] = useState("");
   const [month, setMonth] = useState("November 2026");
   const [amountDue, setAmountDue] = useState("1500");
   const [dueDate, setDueDate] = useState("2026-11-10");
@@ -41,6 +60,16 @@ export default function AddFeeModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successToast, setSuccessToast] = useState(false);
+
+  // Reset form helper
+  const resetForm = () => {
+    setFeeType("monthly_recurring");
+    setTitle("");
+    setMonth("November 2026");
+    setAmountDue("1500");
+    setDueDate("2026-11-10");
+    setError(null);
+  };
 
   // Fetch real students list on mount/open
   useEffect(() => {
@@ -85,7 +114,7 @@ export default function AddFeeModal({
 
     const cleanMonth = month.trim();
     if (!cleanMonth) {
-      setError("Please specify the fee month.");
+      setError("Please specify the fee month / label.");
       return;
     }
 
@@ -103,16 +132,25 @@ export default function AddFeeModal({
     setSubmitting(true);
 
     try {
+      const payload: Record<string, unknown> = {
+        centerId: getCurrentCenterId(),
+        studentId,
+        feeType,
+        month: cleanMonth,
+        amountDue: numAmount,
+        dueDate: new Date(dueDate).toISOString(),
+        status: "Pending",
+      };
+
+      if (feeType === "monthly_recurring") {
+        payload.billingMonth = getCanonicalBillingMonth(cleanMonth, dueDate);
+      } else {
+        payload.title = title.trim() || (feeType === "registration" ? "Registration Fee" : "Ad-hoc Fee");
+      }
+
       const res = await apiClient("/fees", {
         method: "POST",
-        body: {
-          centerId: getCurrentCenterId(),
-          studentId,
-          month: cleanMonth,
-          amountDue: numAmount,
-          dueDate: new Date(dueDate).toISOString(),
-          status: "Pending",
-        },
+        body: payload,
       });
 
       if (!res.success) {
@@ -123,13 +161,14 @@ export default function AddFeeModal({
 
       setTimeout(() => {
         setSuccessToast(false);
+        resetForm();
         onClose();
         if (onSuccess) {
           onSuccess();
         } else {
           window.location.reload();
         }
-      }, 1200);
+      }, 1000);
     } catch (err: unknown) {
       const msg =
         err instanceof Error ? err.message : "Failed to generate fee.";
@@ -226,13 +265,76 @@ export default function AddFeeModal({
             )}
           </div>
 
+          {/* Fee Type Selection */}
+          <div>
+            <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+              Fee Type
+            </label>
+            <div className="grid grid-cols-3 gap-1.5 p-1 rounded-2xl bg-slate-100 border border-slate-200">
+              <button
+                type="button"
+                onClick={() => setFeeType("monthly_recurring")}
+                className={`py-1.5 px-2 rounded-xl text-[11px] font-bold transition-all text-center ${
+                  feeType === "monthly_recurring"
+                    ? "bg-white text-blue-600 shadow-xs"
+                    : "text-slate-500 hover:text-slate-900"
+                }`}
+              >
+                Monthly
+              </button>
+              <button
+                type="button"
+                onClick={() => setFeeType("adhoc")}
+                className={`py-1.5 px-2 rounded-xl text-[11px] font-bold transition-all text-center ${
+                  feeType === "adhoc"
+                    ? "bg-white text-blue-600 shadow-xs"
+                    : "text-slate-500 hover:text-slate-900"
+                }`}
+              >
+                Ad-hoc
+              </button>
+              <button
+                type="button"
+                onClick={() => setFeeType("registration")}
+                className={`py-1.5 px-2 rounded-xl text-[11px] font-bold transition-all text-center ${
+                  feeType === "registration"
+                    ? "bg-white text-blue-600 shadow-xs"
+                    : "text-slate-500 hover:text-slate-900"
+                }`}
+              >
+                Registration
+              </button>
+            </div>
+          </div>
+
+          {/* Title (for Ad-hoc or Registration) */}
+          {feeType !== "monthly_recurring" && (
+            <div>
+              <label
+                htmlFor="fee-title"
+                className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1"
+              >
+                Fee Description / Purpose
+              </label>
+              <input
+                id="fee-title"
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder={feeType === "registration" ? "e.g. Admission Fee" : "e.g. Study Material / Exam Fee"}
+                required
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-3.5 py-2.5 text-xs font-bold text-slate-900 focus:bg-white focus:border-blue-600 focus:outline-none focus:ring-4 focus:ring-blue-100 transition-all"
+              />
+            </div>
+          )}
+
           {/* Month */}
           <div>
             <label
               htmlFor="fee-month"
               className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1"
             >
-              Fee Month / Cycle
+              {feeType === "monthly_recurring" ? "Billing Cycle Month" : "Billing Month Reference"}
             </label>
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">

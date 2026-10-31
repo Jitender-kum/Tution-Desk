@@ -6,17 +6,39 @@ export type FeeStatusType =
   | "Verification Pending"
   | "Partial Paid";
 
+export type FeeType =
+  | "monthly_recurring"
+  | "advance"
+  | "adhoc"
+  | "registration";
+
+export interface IPaymentTransaction {
+  txnId: string;
+  amount: number;
+  date?: Date;
+  mode?: string;
+  status?: string;
+}
+
 export interface IFee {
   centerId: string;
   studentId: Types.ObjectId;
-  month: string;
+  billingMonth?: string; // Canonical YYYY-MM format (e.g., "2026-10")
+  month: string; // Human-readable or legacy label
   title?: string;
   amountDue: number;
   paidAmount?: number;
   dueDate: Date;
   status: FeeStatusType;
+  feeType?: FeeType;
+  lastReminderSentAt?: Date;
+  reminderCount?: number;
+  reminderPaused?: boolean;
+  reminderLockUntil?: Date;
   utrNumber?: string;
   upiTransactionId?: string;
+  processedTxnIds?: string[];
+  paymentTransactions?: IPaymentTransaction[];
   paymentDate?: Date;
   paidDate?: Date;
   paidAt?: Date;
@@ -50,6 +72,18 @@ const FeeSchema = new Schema<IFeeDocument>(
       required: [true, "Fee month is required"],
       trim: true,
     },
+    billingMonth: {
+      type: String,
+      trim: true,
+      match: [/^\d{4}-\d{2}$/, "Invalid billing month format (expected YYYY-MM)"],
+    },
+    feeType: {
+      type: String,
+      enum: {
+        values: ["monthly_recurring", "advance", "adhoc", "registration"],
+        message: "{VALUE} is not a valid fee type",
+      },
+    },
     title: {
       type: String,
       trim: true,
@@ -79,6 +113,21 @@ const FeeSchema = new Schema<IFeeDocument>(
       default: "Pending",
       required: [true, "Fee status is required"],
     },
+    lastReminderSentAt: {
+      type: Date,
+    },
+    reminderCount: {
+      type: Number,
+      default: 0,
+      min: [0, "Reminder count cannot be negative"],
+    },
+    reminderPaused: {
+      type: Boolean,
+      default: false,
+    },
+    reminderLockUntil: {
+      type: Date,
+    },
     utrNumber: {
       type: String,
       trim: true,
@@ -89,6 +138,19 @@ const FeeSchema = new Schema<IFeeDocument>(
       trim: true,
       default: "",
     },
+    processedTxnIds: {
+      type: [String],
+      default: [],
+    },
+    paymentTransactions: [
+      {
+        txnId: { type: String, trim: true },
+        amount: { type: Number },
+        date: { type: Date },
+        mode: { type: String, default: "Online/UPI" },
+        status: { type: String, default: "SUCCESS" },
+      },
+    ],
     paymentDate: {
       type: Date,
     },
@@ -120,6 +182,7 @@ const FeeSchema = new Schema<IFeeDocument>(
   },
   {
     timestamps: true,
+    autoIndex: false,
   }
 );
 
@@ -127,7 +190,12 @@ const FeeSchema = new Schema<IFeeDocument>(
 FeeSchema.index({ centerId: 1, studentId: 1, month: 1 });
 FeeSchema.index({ centerId: 1, status: 1 });
 
-if (process.env.NODE_ENV !== "production" && mongoose.models.Fee) {
+if (
+  process.env.NODE_ENV !== "production" &&
+  mongoose.models.Fee &&
+  (!mongoose.models.Fee.schema.path("billingMonth") ||
+    !mongoose.models.Fee.schema.path("feeType"))
+) {
   delete (mongoose.models as Record<string, unknown>).Fee;
 }
 

@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 
-// Default allowed origins for development, configurable via environment variable
-const DEFAULT_ALLOWED_ORIGINS = [
-  "http://localhost:3000",
-  "http://127.0.0.1:3000",
+// Default allowed origins (in production, localhost is strictly excluded unless explicitly set via ALLOWED_ORIGINS)
+const PRODUCTION_ALLOWED_ORIGINS = [
   "https://tuition-desk-one.vercel.app",
   "https://tution-desk-one.vercel.app",
+];
+
+const DEVELOPMENT_ALLOWED_ORIGINS = [
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+  ...PRODUCTION_ALLOWED_ORIGINS,
 ];
 
 function normalizeOrigin(origin: string): string {
@@ -17,7 +21,12 @@ export function getAllowedOrigins(): Set<string> {
     ? process.env.ALLOWED_ORIGINS.split(",")
     : [];
 
-  const combined = [...DEFAULT_ALLOWED_ORIGINS, ...envOrigins]
+  const baseOrigins =
+    process.env.NODE_ENV === "production"
+      ? PRODUCTION_ALLOWED_ORIGINS
+      : DEVELOPMENT_ALLOWED_ORIGINS;
+
+  const combined = [...baseOrigins, ...envOrigins]
     .map((o) => normalizeOrigin(o))
     .filter(Boolean);
 

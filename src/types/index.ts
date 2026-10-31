@@ -62,10 +62,14 @@ export interface StudentAttendanceItem {
 }
 
 export interface OverdueFeeStudent {
-  id: string;
+  id: string; // Identifier for UI keys/backwards compatibility (contains feeId)
+  feeId?: string; // Explicit MongoDB Fee record _id
+  studentId?: string; // Explicit MongoDB Student record _id
   name: string;
   batchName: string;
   pendingAmount: number;
+  totalAmount?: number;
+  paidAmount?: number;
   daysLate: number;
   parentName: string;
   parentPhone: string;

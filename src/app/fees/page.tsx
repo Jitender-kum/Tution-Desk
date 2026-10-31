@@ -7,15 +7,17 @@ import GlobalReminderButton from "@/components/fees/GlobalReminderButton";
 import OverdueStudentItem from "@/components/fees/OverdueStudentItem";
 import { apiClient, getCurrentCenterId, getApiCache } from "@/lib/apiClient";
 import { OverdueFeeStudent } from "@/types";
+import AddFeeModal from "@/components/modals/AddFeeModal";
 import {
   CheckCircle2,
   AlertCircle,
+  AlertTriangle,
   RefreshCw,
   IndianRupee,
   ShieldCheck,
   Clock,
-  Sparkles,
   Loader2,
+  Plus,
 } from "lucide-react";
 
 interface ApiStudentRef {
@@ -86,18 +88,36 @@ function mapFeeToStudent(fee: ApiFee, idx: number): OverdueFeeStudent {
       ? fee.studentId
       : null;
 
+  const rawStudentId =
+    typeof fee.studentId === "object" && fee.studentId !== null
+      ? fee.studentId._id
+      : (fee.studentId as string);
+
   const studentName = studentObj?.name || "Student";
   const batchName = studentObj?.batch || "General Batch";
   const parentPhone = studentObj?.parentWhatsApp || "9876543210";
   const daysLate = calculateDaysLate(fee.dueDate);
 
+  const paidAmount = Number(fee.paidAmount) || 0;
+  const remainingDue = Number(fee.amountDue) || 0;
+  const totalAmount =
+    fee.status === "Partial Paid"
+      ? paidAmount + remainingDue
+      : fee.status === "Paid"
+      ? paidAmount || remainingDue
+      : remainingDue;
+
   return {
     id: fee._id,
+    feeId: fee._id,
+    studentId: rawStudentId,
     name: studentName,
     batchName: `${batchName} • ${fee.title || fee.month}`,
     title: fee.title || fee.month,
     month: fee.month,
-    pendingAmount: Number(fee.amountDue) || 0,
+    pendingAmount: remainingDue,
+    paidAmount: paidAmount,
+    totalAmount: totalAmount,
     daysLate: daysLate,
     parentName: `Parent of ${studentName}`,
     parentPhone: parentPhone,
@@ -130,7 +150,7 @@ export default function FeesPage() {
   const [activeTab, setActiveTab] = useState<FeeTab>("pending");
 
   const activeCenterId = typeof window !== "undefined" ? getCurrentCenterId() : "";
-  const cachedPending = getApiCache<ApiFee[]>("/fees", { centerId: activeCenterId, status: "Pending" });
+  const cachedPending = getApiCache<ApiFee[]>("/fees", { centerId: activeCenterId, status: "Pending,Partial Paid" });
   const cachedReview = getApiCache<ApiFee[]>("/fees", { centerId: activeCenterId, status: "Verification Pending" });
   const cachedDashboard = getApiCache<{ collectedFeesThisMonth?: number }>("/dashboard/owner", { centerId: activeCenterId });
 
@@ -153,6 +173,7 @@ export default function FeesPage() {
 
   // Reminder & Action States
   const [sentReminders, setSentReminders] = useState<Record<string, boolean>>({});
+  const [sendingReminderId, setSendingReminderId] = useState<string | null>(null);
   const [isGlobalSent, setIsGlobalSent] = useState(false);
   const [isSendingBulk, setIsSendingBulk] = useState(false);
   const [markingPaidId, setMarkingPaidId] = useState<string | null>(null);
@@ -161,6 +182,18 @@ export default function FeesPage() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(() => !cachedPending && !cachedReview);
   const [error, setError] = useState<string | null>(null);
+
+  // Phase 2A Modal & Confirmation States
+  const [isAddFeeModalOpen, setIsAddFeeModalOpen] = useState(false);
+  const [cooldownConfirmFee, setCooldownConfirmFee] = useState<{
+    feeId: string;
+    student: OverdueFeeStudent;
+    message: string;
+  } | null>(null);
+  const [overrideReasonInput, setOverrideReasonInput] = useState(
+    "Parent requested urgent invoice link via phone"
+  );
+  const [isOverriding, setIsOverriding] = useState(false);
 
   // Synchronize dynamic badge count with persistent TopHeader
   useSetHeader({
@@ -209,7 +242,7 @@ export default function FeesPage() {
       const activeId = getCurrentCenterId();
       const [pendingRes, reviewRes, dashboardRes] = await Promise.allSettled([
         apiClient<ApiFee[]>("/fees", {
-          params: { centerId: activeId, status: "Pending" },
+          params: { centerId: activeId, status: "Pending,Partial Paid" },
           skipCache: isRefresh,
         }),
         apiClient<ApiFee[]>("/fees", {
@@ -255,13 +288,19 @@ export default function FeesPage() {
   }, [hasLoadedPaid, fetchPaidHistory, cachedPending, cachedReview]);
 
   useEffect(() => {
-    fetchFeesData();
+    const run = async () => {
+      await fetchFeesData();
+    };
+    run();
   }, [fetchFeesData]);
 
   // Load historical paid records only when the user navigates to the Paid tab
   useEffect(() => {
     if (activeTab === "paid" && !hasLoadedPaid && !loadingPaid) {
-      fetchPaidHistory();
+      const run = async () => {
+        await fetchPaidHistory();
+      };
+      run();
     }
   }, [activeTab, hasLoadedPaid, loadingPaid, fetchPaidHistory]);
 
@@ -291,22 +330,87 @@ export default function FeesPage() {
     return pendingStudents.filter((s) => s.daysLate < 7).length;
   }, [pendingStudents]);
 
-  // Trigger individual WhatsApp reminder (Pending tab)
-  const handleSendIndividual = (student: OverdueFeeStudent) => {
+  // Trigger individual WhatsApp reminder (Pending tab) with 24h cooldown handling
+  const handleSendIndividual = async (
+    student: OverdueFeeStudent,
+    forceOverride = false,
+    overrideReason?: string
+  ) => {
     if (!student) return;
 
-    setSentReminders((prev) => ({
-      ...prev,
-      [student.id]: true,
-    }));
+    // Strict contract: The reminder endpoint expects a FEE ID, not a student ID
+    const feeId = student.feeId || student.id;
+    if (!feeId) {
+      alert("Error: Fee record ID is missing.");
+      return;
+    }
 
-    setToastMessage(
-      `WhatsApp UPI payment link sent to ${student.name}'s parent (${student.parentPhone})!`
-    );
+    setSendingReminderId(feeId);
 
-    setTimeout(() => {
-      setToastMessage(null), 4000;
-    });
+    try {
+      const res = await apiClient<{
+        status?: string;
+        providerMessageId?: string;
+        simulated?: boolean;
+        message?: string;
+        code?: string;
+        error?: string;
+      }>(`/fees/${feeId}/remind`, {
+        method: "POST",
+        body: {
+          forceOverride,
+          overrideReason:
+            overrideReason ||
+            (forceOverride ? "Explicit owner manual override" : undefined),
+        },
+      });
+
+      if (!res.success) {
+        if (
+          res.code === "COOLDOWN_ACTIVE" ||
+          (res.error && res.error.toLowerCase().includes("24 hours"))
+        ) {
+          setCooldownConfirmFee({
+            feeId,
+            student,
+            message:
+              res.error ||
+              "A reminder was already sent to this parent within the last 24 hours.",
+          });
+          return;
+        }
+        throw new Error(res.error || "Failed to dispatch fee reminder.");
+      }
+
+      // Successful dispatch accepted by provider
+      setSentReminders((prev) => ({
+        ...prev,
+        [feeId]: true,
+      }));
+
+      setCooldownConfirmFee(null);
+
+      const toastText = res.data?.simulated
+        ? `[Simulation] Fee reminder queued for ${student.name}'s parent (${student.parentPhone})!`
+        : `Fee reminder accepted by WhatsApp provider for ${student.name}'s parent (${student.parentPhone})!`;
+
+      setToastMessage(toastText);
+      setTimeout(() => setToastMessage(null), 4000);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to send reminder";
+      if (msg.includes("24 hours") || msg.includes("COOLDOWN_ACTIVE")) {
+        setCooldownConfirmFee({
+          feeId,
+          student,
+          message: msg,
+        });
+      } else {
+        alert(msg);
+      }
+    } finally {
+      setSendingReminderId(null);
+      setIsOverriding(false);
+    }
   };
 
   // Trigger global WhatsApp reminder to all pending students
@@ -345,15 +449,17 @@ export default function FeesPage() {
   // Handle Mark as Paid (Cash for Pending dues)
   const handleMarkPaid = async (student: OverdueFeeStudent) => {
     if (!student) return;
+    const feeId = student.feeId || student.id;
+    if (!feeId) return;
 
     const confirmed = window.confirm(
       `Confirm marking fee of ₹${student.pendingAmount.toLocaleString("en-IN")} for ${student.name} as Paid via Cash? This will generate an official receipt number.`
     );
     if (!confirmed) return;
 
-    setMarkingPaidId(student.id);
+    setMarkingPaidId(feeId);
     try {
-      const res = await apiClient<{ receiptNumber?: string }>(`/fees/${student.id}`, {
+      const res = await apiClient<{ receiptNumber?: string }>(`/fees/${feeId}`, {
         method: "PUT",
         body: { status: "Paid", paymentMode: "Cash" },
       });
@@ -378,15 +484,17 @@ export default function FeesPage() {
   // Handle Approve & Mark Paid (Awaiting Review tab)
   const handleApprovePayment = async (student: OverdueFeeStudent) => {
     if (!student) return;
+    const feeId = student.feeId || student.id;
+    if (!feeId) return;
 
     const confirmed = window.confirm(
       `Check your bank statement: Confirm receipt of ₹${student.pendingAmount.toLocaleString("en-IN")} (UTR: ${student.utrNumber || "N/A"}) for ${student.name} and approve payment?`
     );
     if (!confirmed) return;
 
-    setApprovingId(student.id);
+    setApprovingId(feeId);
     try {
-      await apiClient(`/fees/${student.id}`, {
+      await apiClient(`/fees/${feeId}`, {
         method: "PUT",
         body: { paymentMode: "Online/UPI" },
       });
@@ -409,15 +517,17 @@ export default function FeesPage() {
   // Handle Reject & Delete (Awaiting Review tab)
   const handleRejectPayment = async (student: OverdueFeeStudent) => {
     if (!student) return;
+    const feeId = student.feeId || student.id;
+    if (!feeId) return;
 
     const confirmed = window.confirm(
       `Reject & Delete: Are you sure you want to completely remove this fee submission for ${student.name} (Amount: ₹${student.pendingAmount.toLocaleString("en-IN")}, UTR: ${student.utrNumber || "N/A"})? This will clear it from your dashboard and the parent's portal.`
     );
     if (!confirmed) return;
 
-    setRejectingId(student.id);
+    setRejectingId(feeId);
     try {
-      await apiClient(`/fees/${student.id}`, {
+      await apiClient(`/fees/${feeId}`, {
         method: "DELETE",
       });
 
@@ -627,30 +737,44 @@ export default function FeesPage() {
                   </button>
                 </div>
 
-                {/* 4. Pending List Header */}
+                {/* 4. Pending List Header with Add Fee trigger */}
                 <div className="flex items-center justify-between px-0.5">
-                  <h2 className="text-[14px] font-bold text-slate-900 tracking-tight">
-                    Pending Students ({filteredPendingStudents.length})
-                  </h2>
-                  <span className="text-[11px] font-semibold text-slate-400">
-                    Tap green icon to remind
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-[14px] font-bold text-slate-900 tracking-tight">
+                      Pending Students ({filteredPendingStudents.length})
+                    </h2>
+                    <span className="text-[11px] font-semibold text-slate-400 hidden sm:inline">
+                      • Tap green icon to remind
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsAddFeeModalOpen(true)}
+                    className="tap-bounce rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-95 text-white px-3 py-1.5 text-xs font-bold flex items-center gap-1.5 shadow-sm shadow-blue-600/25 transition-all"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    <span>Add Fee</span>
+                  </button>
                 </div>
 
                 {/* 5. Pending Students List */}
                 <div className="space-y-2.5">
                   {filteredPendingStudents.length > 0 ? (
-                    filteredPendingStudents.map((student) => (
-                      <OverdueStudentItem
-                        key={student.id}
-                        student={student}
-                        tabType="pending"
-                        onSendReminder={handleSendIndividual}
-                        isReminderSent={Boolean(sentReminders[student.id])}
-                        onMarkPaid={handleMarkPaid}
-                        isMarkingPaid={markingPaidId === student.id}
-                      />
-                    ))
+                    filteredPendingStudents.map((student) => {
+                      const feeId = student.feeId || student.id;
+                      return (
+                        <OverdueStudentItem
+                          key={feeId}
+                          student={student}
+                          tabType="pending"
+                          onSendReminder={handleSendIndividual}
+                          isReminderSent={Boolean(sentReminders[feeId])}
+                          isSendingReminder={sendingReminderId === feeId}
+                          onMarkPaid={handleMarkPaid}
+                          isMarkingPaid={markingPaidId === feeId}
+                        />
+                      );
+                    })
                   ) : (
                     <div className="rounded-3xl border border-slate-100 bg-white p-8 text-center shadow-xs">
                       <div className="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-600 mx-auto flex items-center justify-center mb-2">
@@ -711,17 +835,20 @@ export default function FeesPage() {
                 {/* Review Students List */}
                 <div className="space-y-2.5">
                   {reviewStudents.length > 0 ? (
-                    reviewStudents.map((student) => (
-                      <OverdueStudentItem
-                        key={student.id}
-                        student={student}
-                        tabType="review"
-                        onVerifyPaid={handleApprovePayment}
-                        isVerifyingPaid={approvingId === student.id}
-                        onRejectFee={handleRejectPayment}
-                        isRejectingFee={rejectingId === student.id}
-                      />
-                    ))
+                    reviewStudents.map((student) => {
+                      const feeId = student.feeId || student.id;
+                      return (
+                        <OverdueStudentItem
+                          key={feeId}
+                          student={student}
+                          tabType="review"
+                          onVerifyPaid={handleApprovePayment}
+                          isVerifyingPaid={approvingId === feeId}
+                          onRejectFee={handleRejectPayment}
+                          isRejectingFee={rejectingId === feeId}
+                        />
+                      );
+                    })
                   ) : (
                     <div className="rounded-3xl border border-slate-100 bg-white p-10 text-center shadow-xs">
                       <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 mx-auto flex items-center justify-center mb-3">
@@ -794,7 +921,7 @@ export default function FeesPage() {
                   ) : paidStudents.length > 0 ? (
                     paidStudents.map((student) => (
                       <OverdueStudentItem
-                        key={student.id}
+                        key={student.feeId || student.id}
                         student={student}
                         tabType="paid"
                       />
@@ -818,6 +945,92 @@ export default function FeesPage() {
           </>
         )}
       </div>
+
+      {/* Add Fee Modal */}
+      <AddFeeModal
+        isOpen={isAddFeeModalOpen}
+        onClose={() => setIsAddFeeModalOpen(false)}
+        onSuccess={() => {
+          setIsAddFeeModalOpen(false);
+          fetchFeesData(true);
+        }}
+      />
+
+      {/* 24-Hour Cooldown Confirmation Dialog */}
+      {cooldownConfirmFee && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-3 sm:p-4 backdrop-blur-xs animate-fade-in">
+          <div className="rounded-3xl border border-slate-200/90 bg-white p-5 sm:p-6 shadow-2xl w-full max-w-sm relative transition-all">
+            <div className="flex items-center gap-2.5 pb-3 border-b border-slate-100 text-amber-600">
+              <AlertTriangle className="h-5 w-5 flex-shrink-0" />
+              <div>
+                <h3 className="text-sm font-extrabold text-slate-900 leading-snug">
+                  Reminder Sent Inside 24 Hours
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  Manual Resend Confirmation
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 my-3 leading-relaxed">
+              A reminder was already sent to{" "}
+              <strong className="text-slate-900">{cooldownConfirmFee.student.name}</strong>{" "}
+              ({cooldownConfirmFee.student.parentPhone}) within the last 24 hours. Are you sure you want to send another reminder now?
+            </p>
+
+            <div className="mb-4">
+              <label
+                htmlFor="override-reason"
+                className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1"
+              >
+                Audit Reason for Override
+              </label>
+              <input
+                id="override-reason"
+                type="text"
+                value={overrideReasonInput}
+                onChange={(e) => setOverrideReasonInput(e.target.value)}
+                placeholder="e.g. Parent requested urgent invoice link via phone"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-3.5 py-2 text-xs font-semibold text-slate-900 focus:bg-white focus:border-blue-600 focus:outline-none focus:ring-4 focus:ring-blue-100 transition-all"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setCooldownConfirmFee(null)}
+                disabled={isOverriding}
+                className="tap-bounce flex-1 h-10 rounded-2xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold text-xs transition-colors"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  setIsOverriding(true);
+                  await handleSendIndividual(
+                    cooldownConfirmFee.student,
+                    true,
+                    overrideReasonInput || "Owner explicit confirmation via UI"
+                  );
+                }}
+                disabled={isOverriding}
+                className="tap-bounce flex-1 h-10 rounded-2xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-amber-600/25 transition-all disabled:opacity-60"
+              >
+                {isOverriding ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <span>Sending...</span>
+                  </>
+                ) : (
+                  <span>Confirm Resend</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

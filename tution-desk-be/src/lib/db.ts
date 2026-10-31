@@ -24,6 +24,10 @@ if (!global.mongooseCache) {
  * during Next.js hot-reloading.
  */
 export async function connectDB(): Promise<typeof mongoose> {
+  if (cached.conn) {
+    return cached.conn;
+  }
+
   const uri = process.env.MONGODB_URI;
 
   if (!uri) {
@@ -32,13 +36,10 @@ export async function connectDB(): Promise<typeof mongoose> {
     );
   }
 
-  if (cached.conn) {
-    return cached.conn;
-  }
-
   if (!cached.promise) {
     const opts: mongoose.ConnectOptions = {
       bufferCommands: false,
+      autoIndex: false,
     };
 
     cached.promise = mongoose.connect(uri, opts).then((mongooseInstance) => {

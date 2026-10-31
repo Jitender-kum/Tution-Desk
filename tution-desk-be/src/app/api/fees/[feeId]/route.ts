@@ -39,16 +39,29 @@ export async function PUT(
 
     const authCenterId = await getAuthenticatedCenterId(request);
     const body = await request.json().catch(() => ({}));
-    const targetCenterId =
-      authCenterId ||
-      body.centerId ||
-      request.headers.get("x-center-id") ||
-      request.nextUrl.searchParams.get("centerId");
+    let targetCenterId = authCenterId;
 
-    const query: Record<string, unknown> = { _id: feeId };
-    if (targetCenterId) {
-      query.centerId = String(targetCenterId).trim();
+    if (!targetCenterId) {
+      if (process.env.NODE_ENV === "production") {
+        return NextResponse.json(
+          { success: false, error: "Authentication required to update fee record" },
+          { status: 401, headers: corsHeaders }
+        );
+      }
+      targetCenterId =
+        body.centerId ||
+        request.headers.get("x-center-id") ||
+        request.nextUrl.searchParams.get("centerId");
     }
+
+    if (!targetCenterId) {
+      return NextResponse.json(
+        { success: false, error: "Authentication or centerId is required" },
+        { status: 401, headers: corsHeaders }
+      );
+    }
+
+    const query: Record<string, unknown> = { _id: feeId, centerId: String(targetCenterId).trim() };
 
     // Find the fee record
     const existingFee = await Fee.findOne(query);
@@ -81,6 +94,12 @@ export async function PUT(
       existingFee.paidAmount = Number(body.paidAmount);
     } else if (!existingFee.paidAmount || existingFee.paidAmount === 0) {
       existingFee.paidAmount = existingFee.amountDue;
+    } else if (existingFee.status === "Paid") {
+      existingFee.paidAmount = (Number(existingFee.paidAmount) || 0) + (Number(existingFee.amountDue) || 0);
+    }
+
+    if (existingFee.status === "Paid" && body.amountDue === undefined) {
+      existingFee.amountDue = 0;
     }
 
     await existingFee.save();
@@ -182,15 +201,28 @@ export async function DELETE(
     }
 
     const authCenterId = await getAuthenticatedCenterId(request);
-    const targetCenterId =
-      authCenterId ||
-      request.headers.get("x-center-id") ||
-      request.nextUrl.searchParams.get("centerId");
+    let targetCenterId = authCenterId;
 
-    const query: Record<string, unknown> = { _id: feeId };
-    if (targetCenterId) {
-      query.centerId = String(targetCenterId).trim();
+    if (!targetCenterId) {
+      if (process.env.NODE_ENV === "production") {
+        return NextResponse.json(
+          { success: false, error: "Authentication required to delete fee record" },
+          { status: 401, headers: corsHeaders }
+        );
+      }
+      targetCenterId =
+        request.headers.get("x-center-id") ||
+        request.nextUrl.searchParams.get("centerId");
     }
+
+    if (!targetCenterId) {
+      return NextResponse.json(
+        { success: false, error: "Authentication or centerId is required" },
+        { status: 401, headers: corsHeaders }
+      );
+    }
+
+    const query: Record<string, unknown> = { _id: feeId, centerId: String(targetCenterId).trim() };
 
     const deletedFee = await Fee.findOneAndDelete(query);
 

@@ -29,6 +29,11 @@ Thumbs.db
 # whatsapp session & cache
 .wwebjs_auth/
 .wwebjs_cache/
+baileys_auth/
+baileys_store/
+*baileys_auth*
+*session*.json
+*auth_info*
 
 # debug
 npm-debug.log*
@@ -55,4 +60,8 @@ atlas-credentials.env
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# audit snapshots & dumps
+.audit_snapshot/
+*.bson
 

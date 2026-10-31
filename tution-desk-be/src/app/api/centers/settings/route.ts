@@ -73,12 +73,22 @@ export async function PUT(request: NextRequest) {
     const { centerId, welcomeMessageTemplate, upiId } = body;
     const headerCenterId = request.headers.get("x-center-id");
 
-    const targetCenterId = authCenterId || centerId || headerCenterId;
+    let targetCenterId = authCenterId;
+
+    if (!targetCenterId) {
+      if (process.env.NODE_ENV === "production") {
+        return NextResponse.json(
+          { success: false, error: "Authentication required to update center settings" },
+          { status: 401, headers: corsHeaders }
+        );
+      }
+      targetCenterId = centerId || headerCenterId;
+    }
 
     if (!targetCenterId) {
       return NextResponse.json(
         { success: false, error: "Authentication or centerId is required" },
-        { status: 400, headers: corsHeaders }
+        { status: 401, headers: corsHeaders }
       );
     }
 

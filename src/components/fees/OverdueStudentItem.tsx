@@ -6,6 +6,7 @@ interface OverdueStudentItemProps {
   tabType?: "pending" | "review" | "paid";
   onSendReminder?: (student: OverdueFeeStudent) => void;
   isReminderSent?: boolean;
+  isSendingReminder?: boolean;
   onMarkPaid?: (student: OverdueFeeStudent) => void;
   isMarkingPaid?: boolean;
   onVerifyPaid?: (student: OverdueFeeStudent) => void;
@@ -32,6 +33,7 @@ export default function OverdueStudentItem({
   tabType,
   onSendReminder,
   isReminderSent = false,
+  isSendingReminder = false,
   onMarkPaid,
   isMarkingPaid = false,
   onVerifyPaid,
@@ -43,6 +45,11 @@ export default function OverdueStudentItem({
   const isVerificationPending = student.status === "Verification Pending";
   const isPartialPaid = student.status === "Partial Paid";
   const isPaid = student.status === "Paid";
+
+  const totalFeeAmount =
+    student.totalAmount ?? (student.pendingAmount + (student.paidAmount || 0));
+  const amountPaidSoFar = student.paidAmount || 0;
+  const remainingBalance = student.pendingAmount;
 
   const isReviewTab = tabType === "review" || isVerificationPending;
   const isPaidTab = tabType === "paid" || isPaid;
@@ -123,6 +130,37 @@ export default function OverdueStudentItem({
             {student.batchName}
           </p>
 
+          {/* Partial Payment Progress Breakdown */}
+          {isPartialPaid && (
+            <div
+              className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px]"
+              data-testid="partial-paid-breakdown"
+            >
+              <span className="inline-flex items-center gap-1.5 rounded-md bg-amber-50 px-2 py-0.5 font-medium text-amber-900 border border-amber-200/80">
+                <span>
+                  Total:{" "}
+                  <strong className="font-semibold text-slate-800 font-mono">
+                    ₹{totalFeeAmount.toLocaleString("en-IN")}
+                  </strong>
+                </span>
+                <span className="text-amber-400">•</span>
+                <span>
+                  Paid:{" "}
+                  <strong className="font-semibold text-emerald-700 font-mono">
+                    ₹{amountPaidSoFar.toLocaleString("en-IN")}
+                  </strong>
+                </span>
+                <span className="text-amber-400">•</span>
+                <span>
+                  Balance:{" "}
+                  <strong className="font-semibold text-rose-700 font-mono">
+                    ₹{remainingBalance.toLocaleString("en-IN")}
+                  </strong>
+                </span>
+              </span>
+            </div>
+          )}
+
           {/* Prominent UTR Display if Verification Pending / Awaiting Review */}
           {isReviewTab && student.utrNumber && (
             <div className="mt-1.5 flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white border border-amber-300 text-xs shadow-2xs w-fit">
@@ -160,15 +198,22 @@ export default function OverdueStudentItem({
           <div className="text-[15px] font-extrabold text-slate-900 font-mono tracking-tight">
             ₹{student.pendingAmount.toLocaleString("en-IN")}
           </div>
-          <span className="text-[10px] font-semibold text-slate-400 block">
-            {isReviewTab
-              ? "Awaiting Approval"
-              : isPaidTab
-              ? "Settled"
-              : isPartialPaid
-              ? "Balance Due"
-              : "Due"}
-          </span>
+          {isPartialPaid ? (
+            <div className="text-[10px] text-amber-800 text-left sm:text-right font-medium">
+              <span className="font-bold text-amber-700 block">Balance Due</span>
+              <span className="text-slate-500 block text-[9.5px]">
+                Paid ₹{amountPaidSoFar.toLocaleString("en-IN")} of ₹{totalFeeAmount.toLocaleString("en-IN")}
+              </span>
+            </div>
+          ) : (
+            <span className="text-[10px] font-semibold text-slate-400 block">
+              {isReviewTab
+                ? "Awaiting Approval"
+                : isPaidTab
+                ? "Settled"
+                : "Due"}
+            </span>
+          )}
         </div>
 
         <div className={`flex items-center gap-2 ${isReviewTab ? "w-full sm:w-auto" : ""}`}>
@@ -265,14 +310,19 @@ export default function OverdueStudentItem({
                 <button
                   type="button"
                   onClick={() => onSendReminder(student)}
+                  disabled={isSendingReminder}
                   aria-label={`Send WhatsApp reminder to ${student.name}'s parent`}
                   className={`tap-bounce h-10 w-10 sm:h-11 sm:w-11 rounded-full flex items-center justify-center transition-all shadow-md ${
-                    isReminderSent
+                    isSendingReminder
+                      ? "bg-slate-300 text-slate-600 cursor-not-allowed"
+                      : isReminderSent
                       ? "bg-emerald-700 text-white shadow-emerald-700/25 ring-2 ring-emerald-200"
                       : "bg-emerald-500 hover:bg-emerald-600 active:scale-90 text-white shadow-emerald-500/30"
                   }`}
                 >
-                  {isReminderSent ? (
+                  {isSendingReminder ? (
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                  ) : isReminderSent ? (
                     <Check className="h-5 w-5 stroke-[2.8]" />
                   ) : (
                     <WhatsAppIcon className="h-5 w-5" />

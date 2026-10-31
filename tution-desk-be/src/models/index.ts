@@ -4,5 +4,7 @@ export * from "./Attendance";
 export * from "./Fee";
 export * from "./Batch";
 export * from "./Test";
+export * from "./FeeReminderLog";
+export * from "./FeeCreationLock";
 
 

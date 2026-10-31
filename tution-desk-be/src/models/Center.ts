@@ -9,6 +9,7 @@ export interface ICenter {
   themeColor?: string;
   welcomeMessageTemplate?: string;
   upiId?: string;
+  dueDateOffsetDays?: number;
   isActive: boolean;
   createdAt?: Date;
   updatedAt?: Date;
@@ -59,6 +60,11 @@ const CenterSchema = new Schema<ICenterDocument>(
       trim: true,
       default: "",
     },
+    dueDateOffsetDays: {
+      type: Number,
+      default: 5,
+      min: [0, "Due date offset cannot be negative"],
+    },
     isActive: {
       type: Boolean,
       default: true,
@@ -69,12 +75,13 @@ const CenterSchema = new Schema<ICenterDocument>(
   }
 );
 
-// Ensure updated schema with password, welcomeMessageTemplate, and upiId fields is recompiled in Next.js development
+// Ensure updated schema with password, welcomeMessageTemplate, upiId, and dueDateOffsetDays fields is recompiled in Next.js development
 if (
   mongoose.models.Center &&
   (!mongoose.models.Center.schema.path("password") ||
     !mongoose.models.Center.schema.path("welcomeMessageTemplate") ||
-    !mongoose.models.Center.schema.path("upiId"))
+    !mongoose.models.Center.schema.path("upiId") ||
+    !mongoose.models.Center.schema.path("dueDateOffsetDays"))
 ) {
   delete mongoose.models.Center;
 }
