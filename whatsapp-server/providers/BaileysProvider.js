@@ -71,6 +71,7 @@ class BaileysProvider extends IWhatsAppProvider {
     this.customBaileys = options.baileysInstance || null;
     this.maxReconnectAttempts = options.maxReconnectAttempts || 5;
     this.maxConsecutiveRestarts = options.maxConsecutiveRestarts || 3;
+    this.initWatchdogTimeoutMs = options.initWatchdogTimeoutMs || 25000;
 
     // Silent pino logger to prevent logging raw frames, tokens, or QR strings
     this.logger = options.pinoLogger || pino({ level: 'silent' });
@@ -141,8 +142,9 @@ class BaileysProvider extends IWhatsAppProvider {
           this.savedSessionCenters.add(id);
         }
 
-        // Auto-reconnect registered paired sessions in background on boot (skipped in unit test runs)
-        if (process.env.NODE_ENV !== 'test') {
+        // Controlled startup auto-reconnection: disabled by default to prevent rolling-deploy duplicate socket collisions.
+        // On-demand rehydration will safely connect sessions when requested or when messages arrive.
+        if (process.env.AUTO_RECONNECT_ON_BOOT === 'true' && process.env.NODE_ENV !== 'test') {
           const registeredCenters = typeof this.authStore.listRegisteredSessions === 'function'
             ? await this.authStore.listRegisteredSessions()
             : [];
@@ -164,6 +166,11 @@ class BaileysProvider extends IWhatsAppProvider {
    */
   async destroySocketSafely(sessionObj) {
     if (!sessionObj) return;
+
+    if (sessionObj.initWatchdogTimer) {
+      clearTimeout(sessionObj.initWatchdogTimer);
+      sessionObj.initWatchdogTimer = null;
+    }
 
     if (sessionObj.reconnectTimer) {
       clearTimeout(sessionObj.reconnectTimer);
@@ -362,6 +369,73 @@ class BaileysProvider extends IWhatsAppProvider {
 
     sessionObj.sock = sock;
 
+    // Set an initialization watchdog timer to recover from stalled socket handshakes
+    const watchdogMs = this.initWatchdogTimeoutMs || 25000;
+    sessionObj.initWatchdogTimer = setTimeout(async () => {
+      if (sessionObj.generation === currentGen && sessionObj.status === 'initializing' && !sessionObj.isReady) {
+        console.warn(`[BaileysProvider] [Center: ${cleanCenterId}] Initialization handshake timed out after ${watchdogMs}ms. Cleaning up stalled socket.`);
+        await this.destroySocketSafely(sessionObj);
+        sessionObj.status = 'disconnected';
+        sessionObj.isReady = false;
+        sessionObj.error = 'WhatsApp initialization handshake timed out. Please click Reconnect to try again.';
+        sessionObj.updatedAt = new Date().toISOString();
+      }
+    }, watchdogMs);
+    if (sessionObj.initWatchdogTimer && typeof sessionObj.initWatchdogTimer.unref === 'function') {
+      sessionObj.initWatchdogTimer.unref();
+    }
+
+    if (sock.ws && typeof sock.ws.on === 'function') {
+      sock.ws.on('error', (wsErr) => {
+        if (sessionObj.generation !== currentGen) return;
+        console.warn(`[BaileysProvider] [Center: ${cleanCenterId}] Underlying WebSocket error:`, wsErr.message);
+      });
+    }
+
+    // Safely wrap CB:success listener on sock.ws to catch unhandled promise rejections from uploadPreKeysToServerIfRequired or sendPassiveIq
+    if (sock.ws && typeof sock.ws.rawListeners === 'function') {
+      const cbSuccessListeners = sock.ws.rawListeners('CB:success');
+      if (cbSuccessListeners.length > 0) {
+        sock.ws.removeAllListeners('CB:success');
+        for (const listener of cbSuccessListeners) {
+          sock.ws.on('CB:success', async (...args) => {
+            try {
+              await listener.apply(sock.ws, args);
+            } catch (cbErr) {
+              if (sessionObj.generation !== currentGen) return;
+              console.warn(
+                `[BaileysProvider] [Center: ${cleanCenterId}] Handshake IQ error caught in CB:success:`,
+                cbErr?.message || cbErr
+              );
+              // Cleanly end the socket with error so connection.update close fires and backoff/cleanup works
+              let endSucceeded = false;
+              if (typeof sock.end === 'function') {
+                try {
+                  sock.end(cbErr);
+                  endSucceeded = true;
+                } catch (endErr) {
+                  console.warn(
+                    `[BaileysProvider] [Center: ${cleanCenterId}] Error invoking sock.end:`,
+                    endErr?.message || endErr
+                  );
+                }
+              }
+              if (!endSucceeded && sock.ws && typeof sock.ws.close === 'function') {
+                try {
+                  sock.ws.close();
+                } catch (closeErr) {
+                  console.warn(
+                    `[BaileysProvider] [Center: ${cleanCenterId}] Error invoking sock.ws.close:`,
+                    closeErr?.message || closeErr
+                  );
+                }
+              }
+            }
+          });
+        }
+      }
+    }
+
     // 1. Credentials update handler
     sock.ev.on('creds.update', async () => {
       if (sessionObj.generation !== currentGen) return;
@@ -383,6 +457,10 @@ class BaileysProvider extends IWhatsAppProvider {
 
       // Handle QR code generation
       if (qr) {
+        if (sessionObj.initWatchdogTimer) {
+          clearTimeout(sessionObj.initWatchdogTimer);
+          sessionObj.initWatchdogTimer = null;
+        }
         sessionObj.qr = qr;
         sessionObj.qrGeneratedAt = Date.now();
         sessionObj.status = 'qr_ready';
@@ -392,6 +470,10 @@ class BaileysProvider extends IWhatsAppProvider {
 
       // Handle open / connected state
       if (connection === 'open') {
+        if (sessionObj.initWatchdogTimer) {
+          clearTimeout(sessionObj.initWatchdogTimer);
+          sessionObj.initWatchdogTimer = null;
+        }
         sessionObj.status = 'connected';
         sessionObj.isReady = true;
         sessionObj.qr = null;
@@ -405,6 +487,10 @@ class BaileysProvider extends IWhatsAppProvider {
 
       // Handle connection close / disconnect
       if (connection === 'close') {
+        if (sessionObj.initWatchdogTimer) {
+          clearTimeout(sessionObj.initWatchdogTimer);
+          sessionObj.initWatchdogTimer = null;
+        }
         sessionObj.isReady = false;
         sessionObj.qr = null;
         sessionObj.qrGeneratedAt = null;
@@ -561,8 +647,15 @@ class BaileysProvider extends IWhatsAppProvider {
       throw new ConnectedRefusalError();
     }
 
-    if (existing && existing.status === 'initializing') {
-      throw new ConflictError('WhatsApp client is currently initializing for this center. Please wait a moment.');
+    const isExplicitNewPairing =
+      options?.action === 'new_pairing' || Boolean(options?.forceNewPairing);
+
+    if (existing && existing.status === 'initializing' && !isExplicitNewPairing) {
+      const elapsed = Date.now() - new Date(existing.updatedAt).getTime();
+      if (elapsed < 10000) {
+        throw new ConflictError('WhatsApp client is currently initializing for this center. Please wait a moment.');
+      }
+      console.warn(`[BaileysProvider] [Center: ${cleanCenterId}] Reconnect overriding stalled initializing session (elapsed: ${elapsed}ms).`);
     }
 
     this.activeLocks.add(cleanCenterId);
@@ -572,9 +665,6 @@ class BaileysProvider extends IWhatsAppProvider {
         await this.destroySocketSafely(existing);
         this.sessions.delete(cleanCenterId);
       }
-
-      const isExplicitNewPairing =
-        options?.action === 'new_pairing' || Boolean(options?.forceNewPairing);
 
       if (isExplicitNewPairing) {
         try {

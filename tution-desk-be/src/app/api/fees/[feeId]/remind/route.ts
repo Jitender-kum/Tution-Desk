@@ -75,6 +75,22 @@ export async function POST(
       );
     }
 
+    if (
+      result.code === "PROVIDER_REJECTED" ||
+      result.code === "DISPATCH_ERROR" ||
+      result.code === "DISPATCH_FAILED" ||
+      result.code === "SERVICE_UNAVAILABLE"
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          code: result.code,
+          error: result.message || "WhatsApp provider service unavailable",
+        },
+        { status: 503, headers: corsHeaders }
+      );
+    }
+
     if (!result.success) {
       return NextResponse.json(
         {

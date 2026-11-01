@@ -824,7 +824,7 @@ export default function SettingsPage() {
                     : isQrReady
                     ? "Awaiting QR Scan"
                     : isInitState
-                    ? "Generating QR..."
+                    ? (statusData.hasSavedSession ? "Reconnecting Session..." : "Generating QR...")
                     : isLoading
                     ? "Checking Status..."
                     : isOffline
