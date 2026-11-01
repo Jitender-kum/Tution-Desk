@@ -6,14 +6,13 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node index.js",
-    "test": "node --test test/persistence.test.js test/api-contract.test.js test/baileys-persistence.test.js test/baileys-provider.test.js test/engine-selection.test.js test/frontend-integration-mapping.test.js test/baileys-outbound-dispatch.test.js test/repair-batch-1-regression.test.js"
+    "test": "node --test test/api-contract.test.js test/baileys-persistence.test.js test/baileys-provider.test.js test/frontend-integration-mapping.test.js test/baileys-outbound-dispatch.test.js test/repair-batch-1-regression.test.js test/session-recovery-regression.test.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "6.7.24",
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "mongoose": "^9.11.4",
-    "qrcode-terminal": "^0.12.0",
-    "whatsapp-web.js": "^1.26.0"
+    "qrcode-terminal": "^0.12.0"
   }
 }

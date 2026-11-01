@@ -5,7 +5,6 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const WWebJSProvider = require('./providers/WWebJSProvider');
 const BaileysProvider = require('./providers/BaileysProvider');
 const { ProviderError } = require('./providers/ProviderErrors');
 
@@ -29,49 +28,27 @@ if (!INTERNAL_SECRET || !INTERNAL_SECRET.trim()) {
 }
 
 /**
- * Creates and validates the configured WhatsApp provider.
- * Supports:
- *  - 'baileys' (default lightweight WebSocket engine when WHATSAPP_ENGINE is unset or empty)
- *  - 'wwebjs' (legacy Chromium RemoteAuth engine)
- * Rejects unsupported engines at startup rather than silently choosing a fallback.
+ * Creates and initializes the WhatsApp provider.
+ * Standardized exclusively on BaileysProvider (lightweight WebSocket engine).
  *
- * @param {string} [engineName=process.env.WHATSAPP_ENGINE]
+ * @param {string|Object} [engineOrOptions] - Optional engine name string or options object
  * @param {Object} [options]
- * @returns {import('./providers/IWhatsAppProvider')}
+ * @returns {BaileysProvider}
  */
-function createProvider(engineName = process.env.WHATSAPP_ENGINE, options = {}) {
-  const engine = (engineName || 'baileys').trim().toLowerCase();
+function createProvider(engineOrOptions, options = {}) {
+  const mergedOptions =
+    typeof engineOrOptions === 'object' && engineOrOptions !== null
+      ? { ...engineOrOptions, ...options }
+      : options;
 
-  if (engine === 'wwebjs') {
-    return new WWebJSProvider({
-      mongodbUri: options.mongodbUri || process.env.MONGODB_URI,
-      backupSyncIntervalMs: options.backupSyncIntervalMs || 900000,
-    });
-  }
-
-  if (engine === 'baileys') {
-    return new BaileysProvider({
-      mongodbUri: options.mongodbUri || process.env.MONGODB_URI,
-      ...options,
-    });
-  }
-
-  throw new Error(
-    `Unsupported WHATSAPP_ENGINE '${engineName}'. Supported engines are 'wwebjs' and 'baileys'.`
-  );
+  return new BaileysProvider({
+    mongodbUri: mergedOptions.mongodbUri || process.env.MONGODB_URI,
+    ...mergedOptions,
+  });
 }
 
 // Instantiate exactly one active WhatsApp provider per process
-let provider;
-try {
-  provider = createProvider();
-} catch (err) {
-  console.error(`FATAL: ${err.message}`);
-  process.exit(1);
-}
-
-// Kick off active provider initialization early
-provider.init();
+const provider = createProvider();
 
 const PORT = process.env.PORT || 3005;
 const HOST = process.env.WHATSAPP_HOST || '0.0.0.0';

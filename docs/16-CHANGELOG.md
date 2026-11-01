@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [0.2.4] - 2026-11-01
+
+### Changed — Permanent Standardization to Baileys Engine
+- **Engine Standardization**:
+  - Permanently switched WhatsApp microservice to lightweight `@whiskeysockets/baileys` WebSocket engine.
+  - Completely removed `whatsapp-web.js` dependency and Chromium footprint to eliminate Render Out-Of-Memory (OOM) crashes.
+  - Deleted legacy `providers/WWebJSProvider.js`, `mongoStore.js` (GridFS zip storage), and `sessionMigration.js`.
+- **Refactored Server Entry Point**:
+  - Updated `whatsapp-server/index.js` to initialize `BaileysProvider` directly without engine toggles or legacy store references.
+- **Contract & Regression Test Suite**:
+  - Refactored `api-contract.test.js` to validate `formatBaileysJid` and JID target formatting (`@s.whatsapp.net`).
+  - Added live simulation script `whatsapp-server/verify-baileys-live.js` validating MongoDB auth storage, live socket initialization, QR generation, session refresh, and fail-closed message dispatch.
+  - Verified 100% test pass rate across 29 test suites.
+
+---
+
 ## [0.2.3] - 2026-11-01
 
 ### Implemented — WhatsApp Repair Batch 1 (Connectivity & Tenant Isolation)

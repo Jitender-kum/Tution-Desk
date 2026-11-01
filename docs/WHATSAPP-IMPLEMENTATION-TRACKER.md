@@ -214,3 +214,16 @@ graph TD
 - **Frontend Typecheck**: Passed with 0 errors (`tsc --noEmit`).
 - **Root Integration Tests**: 38/38 passing across all suites (`fee_reminder_http_mapping`, `fee_whatsapp_validation`, `phase4_e2e_verification`).
 - **Remaining Runtime Verification**: Physical QR scan and cellular packet delivery remain unverified until deployment with authorized test handset.
+
+### 9.5 Pre-Push Production Deployment Audit
+*Audit Date: November 1, 2026*
+
+| Component | Target Platform | Root Directory | Production Branch | Auto-Deploy Trigger |
+| :--- | :--- | :--- | :--- | :--- |
+| **Frontend UI** | Vercel (`tution-desk-one.vercel.app`) | `./` | `main` | Yes (`git push origin main` triggers build) |
+| **Backend API** | Vercel (`tuition-desk-backend.vercel.app`) | `./tution-desk-be` | `main` | Evaluates diff on `tution-desk-be/` (no code changes in batch) |
+| **WhatsApp Microservice** | Render Web Service / Container | `./whatsapp-server` | `main` | Yes (`git push origin main` triggers Docker build) |
+
+- **Ancestry Verification**: `main` (`c4a99c3`) is 2 commits ahead of `origin/main` (`9423591`). Fast-forward push confirmed.
+- **Environment Parity**: Required variable names verified present across environment files.
+- **Fail-Closed Safety**: Microservice fails boot if `WHATSAPP_INTERNAL_SECRET` is unset; outbound dispatch fails closed under simulation default (`WHATSAPP_MODE=simulation`, `ENABLE_LIVE_WHATSAPP=false`).

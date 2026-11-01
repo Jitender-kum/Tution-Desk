@@ -8,7 +8,7 @@ const express = require('express');
 // Set dummy internal secret for test environment before loading modules
 process.env.WHATSAPP_INTERNAL_SECRET = 'test_internal_secret_for_contract_suite_12345';
 
-const { formatWhatsAppId } = require('../providers/WWebJSProvider');
+const { formatBaileysJid } = require('../providers/BaileysProvider');
 const app = require('../index');
 
 describe('TuitionDesk WhatsApp HTTP API Contract & Phone Normalization Suite', () => {
@@ -38,27 +38,27 @@ describe('TuitionDesk WhatsApp HTTP API Contract & Phone Normalization Suite', (
   });
 
   // 1. Phone number normalization unit tests
-  describe('Phone Number Normalization (formatWhatsAppId)', () => {
+  describe('Phone Number Normalization (formatBaileysJid)', () => {
     it('1.1 Normalizes standard 10-digit Indian phone number', () => {
-      assert.strictEqual(formatWhatsAppId('9876543210'), '919876543210@c.us');
+      assert.strictEqual(formatBaileysJid('9876543210'), '919876543210@s.whatsapp.net');
     });
 
     it('1.2 Normalizes 12-digit number already prefixed with 91', () => {
-      assert.strictEqual(formatWhatsAppId('919876543210'), '919876543210@c.us');
+      assert.strictEqual(formatBaileysJid('919876543210'), '919876543210@s.whatsapp.net');
     });
 
     it('1.3 Normalizes 11-digit number with leading trunk zero', () => {
-      assert.strictEqual(formatWhatsAppId('09876543210'), '919876543210@c.us');
+      assert.strictEqual(formatBaileysJid('09876543210'), '919876543210@s.whatsapp.net');
     });
 
     it('1.4 Strips formatting: spaces, dashes, parentheses, plus signs', () => {
-      assert.strictEqual(formatWhatsAppId('+91 (98765) 43-210'), '919876543210@c.us');
+      assert.strictEqual(formatBaileysJid('+91 (98765) 43-210'), '919876543210@s.whatsapp.net');
     });
 
     it('1.5 Returns null for empty or invalid inputs', () => {
-      assert.strictEqual(formatWhatsAppId(''), null);
-      assert.strictEqual(formatWhatsAppId(null), null);
-      assert.strictEqual(formatWhatsAppId(undefined), null);
+      assert.strictEqual(formatBaileysJid(''), null);
+      assert.strictEqual(formatBaileysJid(null), null);
+      assert.strictEqual(formatBaileysJid(undefined), null);
     });
   });
 

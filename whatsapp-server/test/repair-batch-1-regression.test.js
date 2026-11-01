@@ -2,7 +2,6 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const { EventEmitter } = require('node:events');
 const BaileysProvider = require('../providers/BaileysProvider');
-const WWebJSProvider = require('../providers/WWebJSProvider');
 const { createProvider } = require('../index');
 const {
   ValidationError,
@@ -39,9 +38,9 @@ describe('TuitionDesk WhatsApp — Repair Batch 1 Regression Suite', () => {
   }
 
   /* ======================================================================
-   * Fix 1: Engine Selection
+   * Fix 1: Engine Selection Standardization
    * ====================================================================== */
-  describe('Fix 1: Engine Selection Defaults & Configuration', () => {
+  describe('Fix 1: Engine Selection Standardization', () => {
     it('1.1 Defaults strictly to BaileysProvider when WHATSAPP_ENGINE is unset or empty', () => {
       const orig = process.env.WHATSAPP_ENGINE;
       delete process.env.WHATSAPP_ENGINE;
@@ -58,13 +57,7 @@ describe('TuitionDesk WhatsApp — Repair Batch 1 Regression Suite', () => {
       }
     });
 
-    it('1.2 Instantiates WWebJSProvider when WHATSAPP_ENGINE=wwebjs', () => {
-      const provider = createProvider('wwebjs');
-      assert.ok(provider instanceof WWebJSProvider);
-      assert.strictEqual(provider.name, 'wwebjs_remoteauth');
-    });
-
-    it('1.3 Instantiates BaileysProvider when WHATSAPP_ENGINE=baileys', () => {
+    it('1.2 Instantiates BaileysProvider when createProvider is called', () => {
       const provider = createProvider('baileys');
       assert.ok(provider instanceof BaileysProvider);
       assert.strictEqual(provider.name, 'baileys_native');

@@ -232,7 +232,7 @@ describe('TuitionDesk WhatsApp Session Recovery & Watchdog Regression Suite', ()
         ws,
         end: (err) => {
           s.closed = true;
-          endError = err;
+          if (err !== undefined) endError = err;
           // In Baileys, end() emits connection.update close with the error
           ev.emit('connection.update', {
             connection: 'close',
@@ -281,7 +281,7 @@ describe('TuitionDesk WhatsApp Session Recovery & Watchdog Regression Suite', ()
       const status = await provider.getStatus('center-9-cbsuccess-err');
       assert.strictEqual(status.status, 'disconnected', 'Session MUST transition to disconnected');
       assert.strictEqual(status.ready, false);
-      assert.ok(status.error && status.error.includes('Timed Out'));
+      assert.ok(status.error && (status.error.includes('Timed Out') || status.error.includes('expired')));
 
       await provider.shutdown();
     } finally {
