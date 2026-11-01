@@ -5,9 +5,13 @@ import { useSetHeader } from "@/components/layout/HeaderContext";
 import FeesSummaryHeroCard from "@/components/fees/FeesSummaryHeroCard";
 import GlobalReminderButton from "@/components/fees/GlobalReminderButton";
 import OverdueStudentItem from "@/components/fees/OverdueStudentItem";
+import dynamic from "next/dynamic";
 import { apiClient, getCurrentCenterId, getApiCache } from "@/lib/apiClient";
 import { OverdueFeeStudent } from "@/types";
-import AddFeeModal from "@/components/modals/AddFeeModal";
+
+const AddFeeModal = dynamic(() => import("@/components/modals/AddFeeModal"), {
+  ssr: false,
+});
 import {
   CheckCircle2,
   AlertCircle,

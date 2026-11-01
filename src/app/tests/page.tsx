@@ -1,10 +1,18 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useDeferredValue } from "react";
-import CreateTestModal from "@/components/modals/CreateTestModal";
-import EnterMarksModal from "@/components/modals/EnterMarksModal";
+import dynamic from "next/dynamic";
 import { apiClient, getCurrentCenterId, getApiCache } from "@/lib/apiClient";
 import { TestRecord, BatchRecord } from "@/types";
+
+const CreateTestModal = dynamic(
+  () => import("@/components/modals/CreateTestModal"),
+  { ssr: false }
+);
+const EnterMarksModal = dynamic(
+  () => import("@/components/modals/EnterMarksModal"),
+  { ssr: false }
+);
 import {
   FileText,
   Plus,

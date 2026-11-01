@@ -15,8 +15,9 @@ import {
   ChevronRight,
   X,
 } from "lucide-react";
-import { useHeader } from "@/components/layout/HeaderContext";
+import { useHeader, type AlertItem } from "@/components/layout/HeaderContext";
 import { getAuthenticatedCenter, clearCachedCenter } from "@/lib/centerProfile";
+import { useNotificationPermission } from "@/hooks/useNotificationPermission";
 
 export interface TopHeaderProps {
   title?: string;
@@ -26,14 +27,7 @@ export interface TopHeaderProps {
   showLogout?: boolean;
 }
 
-interface AlertItem {
-  id: string;
-  type: "warning" | "error" | "info" | "success";
-  title: string;
-  message: string;
-  link?: string;
-  time: string;
-}
+
 
 const ROUTE_DEFAULTS: Record<
   string,
@@ -99,9 +93,12 @@ export default function TopHeader(props: TopHeaderProps) {
   const [centerName, setCenterName] = useState("Loading...");
   const [initials, setInitials] = useState("");
 
-  // Notifications State
-  const [alerts, setAlerts] = useState<AlertItem[]>([]);
-  const [unreadCount, setUnreadCount] = useState(0);
+  const { isGranted: isNotificationGranted } = useNotificationPermission();
+
+  // Dynamic Alerts & Badges State from HeaderContext (shared globally, no duplicate fetches)
+  const alerts = headerContext?.alerts ?? [];
+  const setAlerts = headerContext?.setAlerts;
+  const unreadCount = headerContext?.unreadCount ?? 0;
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -125,21 +122,6 @@ export default function TopHeader(props: TopHeaderProps) {
         setInitials("TC");
       });
   }, [isParentPortal]);
-
-  // 2. Fetch Dynamic Smart Notifications (skipped on public parent portal)
-  useEffect(() => {
-    if (!showNotifications || isParentPortal) return;
-
-    fetch("/api/notifications")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data?.success && Array.isArray(data.alerts)) {
-          setAlerts(data.alerts);
-          setUnreadCount(data.unreadCount ?? data.alerts.length);
-        }
-      })
-      .catch(() => {});
-  }, [showNotifications, isParentPortal]);
 
   // 3. Click-outside listener for dropdown
   useEffect(() => {
@@ -236,7 +218,7 @@ export default function TopHeader(props: TopHeaderProps) {
             <Settings className="w-4 h-4 stroke-[2]" />
           </Link>
 
-          {showNotifications && (
+          {showNotifications && isNotificationGranted && (
             <div className="relative">
               <button
                 type="button"
@@ -252,9 +234,9 @@ export default function TopHeader(props: TopHeaderProps) {
                 <Bell className="w-4 h-4 stroke-[2]" />
 
                 {/* Dynamic Red Dot Badge if unread alerts exist */}
-                {alerts.length > 0 && (
+                {unreadCount > 0 && (
                   <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-rose-600 px-1 text-[9px] font-black text-white ring-2 ring-white animate-pulse">
-                    {unreadCount > 0 ? unreadCount : alerts.length}
+                    {unreadCount > 99 ? "99+" : unreadCount}
                   </span>
                 )}
               </button>
@@ -268,9 +250,9 @@ export default function TopHeader(props: TopHeaderProps) {
                       <span className="text-[13px] font-extrabold text-slate-900">
                         Center Alerts
                       </span>
-                      {alerts.length > 0 && (
+                      {unreadCount > 0 && (
                         <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-bold text-rose-600 border border-rose-200/60">
-                          {alerts.length} New
+                          {unreadCount} New
                         </span>
                       )}
                     </div>
@@ -367,7 +349,7 @@ export default function TopHeader(props: TopHeaderProps) {
                     <div className="border-t border-slate-100 pt-2 px-1 text-center">
                       <button
                         type="button"
-                        onClick={() => setAlerts([])}
+                        onClick={() => setAlerts?.([])}
                         className="text-[11px] font-bold text-slate-400 hover:text-slate-600"
                       >
                         Clear all notifications

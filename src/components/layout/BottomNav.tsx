@@ -9,6 +9,7 @@ import {
   BarChart3,
   Users,
 } from "lucide-react";
+import { useHeader } from "@/components/layout/HeaderContext";
 
 interface TabItem {
   id: string;
@@ -36,7 +37,6 @@ const TABS: TabItem[] = [
     label: "Fees",
     href: "/fees",
     icon: IndianRupee,
-    badge: "3",
   },
   {
     id: "tests",
@@ -54,6 +54,23 @@ const TABS: TabItem[] = [
 
 export default function BottomNav() {
   const pathname = usePathname();
+  const headerContext = useHeader();
+  const overdueCount = headerContext?.overdueCount ?? 0;
+
+  const tabs = TABS.map((tab) => {
+    if (tab.id === "fees") {
+      return {
+        ...tab,
+        badge:
+          overdueCount > 0
+            ? overdueCount > 99
+              ? "99+"
+              : String(overdueCount)
+            : undefined,
+      };
+    }
+    return tab;
+  });
 
   return (
     <nav
@@ -62,7 +79,7 @@ export default function BottomNav() {
       className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md sm:max-w-2xl md:max-w-4xl lg:max-w-5xl glass-surface border-t border-slate-200/80 px-2 sm:px-6 pt-1.5 pb-2.5 z-50 shadow-[0_-4px_20px_rgba(0,0,0,0.04)]"
     >
       <div className="grid grid-cols-5 gap-1 items-center">
-        {TABS.map((tab) => {
+        {tabs.map((tab) => {
           const isActive =
             tab.href === "/"
               ? pathname === "/"

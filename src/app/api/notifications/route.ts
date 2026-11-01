@@ -46,16 +46,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(
       {
         success: true,
-        alerts: [
-          {
-            id: "default-status",
-            type: "info",
-            title: "System Ready",
-            message: "Tuition Desk is ready for classroom management.",
-            time: "Now",
-          },
-        ],
+        alerts: [],
         unreadCount: 0,
+        overdueCount: 0,
+        isWhatsappConnected: false,
       },
       { status: 200 }
     );

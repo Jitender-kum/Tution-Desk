@@ -139,6 +139,8 @@ export async function GET(request: NextRequest) {
         success: true,
         alerts,
         unreadCount,
+        overdueCount,
+        isWhatsappConnected,
       },
       { status: 200, headers: corsHeaders }
     );

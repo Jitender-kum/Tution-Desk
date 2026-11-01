@@ -6,9 +6,14 @@ import PendingFeesHeroCard from "@/components/dashboard/PendingFeesHeroCard";
 import { getAuthenticatedCenter } from "@/lib/centerProfile";
 import StatsRow from "@/components/dashboard/StatsRow";
 import QuickActions from "@/components/dashboard/QuickActions";
+import dynamic from "next/dynamic";
 import TodayScheduleTimeline from "@/components/dashboard/TodayScheduleTimeline";
-import RecentActivityCard from "@/components/dashboard/RecentActivityCard";
 import { apiClient, getApiCache } from "@/lib/apiClient";
+
+const RecentActivityCard = dynamic(
+  () => import("@/components/dashboard/RecentActivityCard"),
+  { ssr: false }
+);
 import {
   DashboardMetrics,
   QuickBatchAttendance,

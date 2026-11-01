@@ -1,10 +1,18 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useDeferredValue } from "react";
-import StudentFormModal from "@/components/modals/StudentFormModal";
-import CreateBatchModal from "@/components/modals/CreateBatchModal";
+import dynamic from "next/dynamic";
 import { apiClient, getCurrentCenterId, getApiCache } from "@/lib/apiClient";
 import { StudentRecord, BatchRecord } from "@/types";
+
+const StudentFormModal = dynamic(
+  () => import("@/components/modals/StudentFormModal"),
+  { ssr: false }
+);
+const CreateBatchModal = dynamic(
+  () => import("@/components/modals/CreateBatchModal"),
+  { ssr: false }
+);
 import Link from "next/link";
 import {
   UserPlus,
