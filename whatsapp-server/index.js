@@ -331,6 +331,12 @@ const app = createApp(provider);
 
 let server = null;
 if (require.main === module) {
+  if (typeof provider.init === 'function') {
+    provider.init().catch((err) => {
+      console.error('❌ Failed to initialize WhatsApp provider on startup:', err.message);
+    });
+  }
+
   server = app.listen(PORT, HOST, () => {
     console.log(`🚀 Multi-Tenant WhatsApp Microservice listening on http://${HOST}:${PORT}`);
   });

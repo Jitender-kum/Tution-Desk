@@ -28,7 +28,10 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const upstreamUrl = `${WHATSAPP_SERVICE_URL}/logout/${encodeURIComponent(
+    const baseUrl = (
+      process.env.WHATSAPP_SERVICE_URL || "http://localhost:3005"
+    ).replace(/\/+$/, "");
+    const upstreamUrl = `${baseUrl}/logout/${encodeURIComponent(
       centerId
     )}`;
 

@@ -393,4 +393,65 @@ describe('TuitionDesk WhatsApp — Repair Batch 1 Regression Suite', () => {
       await provider.shutdown();
     });
   });
+
+  /* ======================================================================
+   * Fix 7: Boot Mongo Initialization & Lazy ensureMongoConnected
+   * ====================================================================== */
+  describe('Fix 7: Boot Mongo Initialization & Lazy Connection Guard', () => {
+    it('7.1 ensureMongoConnected lazily triggers init() and awaits mongoInitPromise', async () => {
+      let connectCalled = false;
+      const mockMongoose = {
+        connection: { readyState: 0 },
+        connect: async () => {
+          connectCalled = true;
+          mockMongoose.connection.readyState = 1;
+          mockMongoose.connection.db = {};
+        },
+      };
+
+      const provider = new BaileysProvider({
+        mongodbUri: 'mongodb://mock-cluster/tuitiondesk_test',
+        mongooseInstance: mockMongoose,
+      });
+
+      assert.strictEqual(connectCalled, false);
+      assert.strictEqual(provider.isMongoConnected, false);
+
+      await provider.ensureMongoConnected();
+
+      assert.strictEqual(connectCalled, true);
+      assert.strictEqual(provider.isMongoConnected, true);
+
+      await provider.shutdown();
+    });
+
+    it('7.2 getStatus awaits ensureMongoConnected when called on cold provider', async () => {
+      let connectCalled = false;
+      const mockMongoose = {
+        connection: { readyState: 0 },
+        connect: async () => {
+          connectCalled = true;
+          mockMongoose.connection.readyState = 1;
+          mockMongoose.connection.db = {
+            collection: () => ({
+              distinct: async () => [],
+              findOne: async () => null,
+            }),
+          };
+        },
+      };
+
+      const provider = new BaileysProvider({
+        mongodbUri: 'mongodb://mock-cluster/tuitiondesk_test',
+        mongooseInstance: mockMongoose,
+      });
+
+      const status = await provider.getStatus('center-cold-check');
+      assert.strictEqual(connectCalled, true);
+      assert.strictEqual(status.status, 'disconnected');
+      assert.strictEqual(status.hasSavedSession, false);
+
+      await provider.shutdown();
+    });
+  });
 });

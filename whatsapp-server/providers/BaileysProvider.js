@@ -126,16 +126,23 @@ class BaileysProvider extends IWhatsAppProvider {
    * Initialize MongoDB connection and discover saved remote sessions without socket connections.
    */
   async init() {
-    if (this.mongodbUri && this.mongodbUri.trim() && !this.isMongoConnected) {
-      try {
-        this.mongoInitPromise = this.mongoose.connect(this.mongodbUri.trim(), {
-          serverSelectionTimeoutMS: 5000,
-          connectTimeoutMS: 10000,
-          maxPoolSize: 5,
-        });
-        await this.mongoInitPromise;
-      } catch (err) {
-        console.error('❌ [BaileysProvider] Failed to connect to MongoDB:', err.message);
+    if (!this.isMongoConnected) {
+      if (this.mongoInitPromise) {
+        try {
+          await this.mongoInitPromise;
+        } catch {}
+      } else if (this.mongodbUri && this.mongodbUri.trim()) {
+        try {
+          this.mongoInitPromise = this.mongoose.connect(this.mongodbUri.trim(), {
+            serverSelectionTimeoutMS: 5000,
+            connectTimeoutMS: 10000,
+            maxPoolSize: 5,
+          });
+          await this.mongoInitPromise;
+        } catch (err) {
+          this.mongoInitPromise = null;
+          console.error('❌ [BaileysProvider] Failed to connect to MongoDB:', err.message);
+        }
       }
     }
 
@@ -172,6 +179,22 @@ class BaileysProvider extends IWhatsAppProvider {
       } catch (err) {
         console.warn('⚠️ [BaileysProvider] Could not list saved sessions during init:', err.message);
       }
+    }
+  }
+
+  /**
+   * Lazily ensures MongoDB connection is established and awaited before session access.
+   */
+  async ensureMongoConnected() {
+    if (this.isMongoConnected) return;
+    if (this.mongoInitPromise) {
+      try {
+        await this.mongoInitPromise;
+      } catch {}
+      return;
+    }
+    if (this.mongodbUri && this.mongodbUri.trim()) {
+      await this.init();
     }
   }
 
@@ -220,11 +243,7 @@ class BaileysProvider extends IWhatsAppProvider {
   async getStatus(centerId) {
     const cleanCenterId = validateCenterId(centerId).toLowerCase();
 
-    if (this.mongoInitPromise) {
-      try {
-        await this.mongoInitPromise;
-      } catch {}
-    }
+    await this.ensureMongoConnected();
 
     let hasSavedSession = this.savedSessionCenters.has(cleanCenterId);
     if (!hasSavedSession && this.isMongoConnected) {
@@ -270,6 +289,7 @@ class BaileysProvider extends IWhatsAppProvider {
    * @returns {Promise<GlobalProviderStats>}
    */
   async getGlobalStats() {
+    await this.ensureMongoConnected();
     const mem = process.memoryUsage();
     let activeSocketsCount = 0;
     let readySessionsCount = 0;
@@ -609,6 +629,8 @@ class BaileysProvider extends IWhatsAppProvider {
   async initializeSession(centerId) {
     const cleanCenterId = validateCenterId(centerId).toLowerCase();
 
+    await this.ensureMongoConnected();
+
     if (this.sessions.has(cleanCenterId)) {
       const existing = this.sessions.get(cleanCenterId);
       if (
@@ -663,6 +685,8 @@ class BaileysProvider extends IWhatsAppProvider {
    */
   async reconnectSession(centerId, options = {}) {
     const cleanCenterId = validateCenterId(centerId).toLowerCase();
+
+    await this.ensureMongoConnected();
 
     if (this.activeLocks.has(cleanCenterId) || this.inFlightInitPromises.has(cleanCenterId)) {
       throw new ConflictError();
@@ -734,6 +758,8 @@ class BaileysProvider extends IWhatsAppProvider {
     }
 
     const targetCenterId = validateCenterId(centerId).toLowerCase();
+
+    await this.ensureMongoConnected();
 
     let session = this.sessions.get(targetCenterId);
 
@@ -819,6 +845,8 @@ class BaileysProvider extends IWhatsAppProvider {
    */
   async logoutSession(centerId) {
     const cleanCenterId = validateCenterId(centerId).toLowerCase();
+
+    await this.ensureMongoConnected();
 
     if (this.activeLocks.has(cleanCenterId)) {
       throw new ConflictError();
