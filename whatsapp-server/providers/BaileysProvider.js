@@ -72,6 +72,7 @@ class BaileysProvider extends IWhatsAppProvider {
     this.maxReconnectAttempts = options.maxReconnectAttempts || 5;
     this.maxConsecutiveRestarts = options.maxConsecutiveRestarts || 3;
     this.initWatchdogTimeoutMs = options.initWatchdogTimeoutMs || 25000;
+    this.coldSessionTimeoutMs = options.coldSessionTimeoutMs || Number(process.env.WHATSAPP_COLD_REHYDRATION_TIMEOUT_MS) || 15000;
 
     // Silent pino logger to prevent logging raw frames, tokens, or QR strings
     this.logger = options.pinoLogger || pino({ level: 'silent' });
@@ -87,6 +88,9 @@ class BaileysProvider extends IWhatsAppProvider {
     this.inFlightInitPromises = new Map();
     this.savedSessionCenters = new Set();
     this.mongoInitPromise = null;
+    this._bootReconnected = false;
+    this._bootTimers = new Set();
+    this._isShuttingDown = false;
   }
 
   get name() {
@@ -142,16 +146,27 @@ class BaileysProvider extends IWhatsAppProvider {
           this.savedSessionCenters.add(id);
         }
 
-        // Controlled startup auto-reconnection: disabled by default to prevent rolling-deploy duplicate socket collisions.
-        // On-demand rehydration will safely connect sessions when requested or when messages arrive.
-        if (process.env.AUTO_RECONNECT_ON_BOOT === 'true' && process.env.NODE_ENV !== 'test') {
+        // Controlled startup auto-reconnection: enabled by default unless explicitly disabled via AUTO_RECONNECT_ON_BOOT=false
+        // Suppressed in test environments (NODE_ENV=test) to prevent network socket leaks in unit tests.
+        const autoReconnectEnabled = process.env.AUTO_RECONNECT_ON_BOOT !== 'false' && process.env.NODE_ENV !== 'test';
+        if (autoReconnectEnabled && !this._bootReconnected) {
+          this._bootReconnected = true;
           const registeredCenters = typeof this.authStore.listRegisteredSessions === 'function'
             ? await this.authStore.listRegisteredSessions()
             : [];
+          // Stagger startup reconnections by 500ms between centers to avoid CPU / connection spikes
+          let delay = 0;
           for (const regId of registeredCenters) {
-            this.initializeSession(regId).catch((bootErr) => {
-              console.warn(`[BaileysProvider] [Center: ${regId}] Background startup reconnect notice:`, bootErr.message);
-            });
+            const centerToRestore = regId;
+            const timer = setTimeout(() => {
+              this._bootTimers.delete(timer);
+              this.initializeSession(centerToRestore).catch((bootErr) => {
+                console.warn(`[BaileysProvider] [Center: ${centerToRestore}] Background startup reconnect notice:`, bootErr.message);
+              });
+            }, delay);
+            if (timer && typeof timer.unref === 'function') timer.unref();
+            this._bootTimers.add(timer);
+            delay += 500;
           }
         }
       } catch (err) {
@@ -306,6 +321,7 @@ class BaileysProvider extends IWhatsAppProvider {
    * @private
    */
   async _spawnSocket(centerId) {
+    if (this._isShuttingDown) return null;
     const cleanCenterId = validateCenterId(centerId).toLowerCase();
 
     let sessionObj = this.sessions.get(cleanCenterId);
@@ -506,6 +522,9 @@ class BaileysProvider extends IWhatsAppProvider {
         const isRestartRequired =
           statusCode === DisconnectReason?.restartRequired || statusCode === 515;
 
+        const isQrTimeout =
+          statusCode === DisconnectReason?.timedOut || statusCode === 408;
+
         if (isLoggedOut) {
           sessionObj.status = 'disconnected';
           sessionObj.error = 'WhatsApp session logged out from device';
@@ -515,6 +534,13 @@ class BaileysProvider extends IWhatsAppProvider {
             await authState.clearAuth();
             this.savedSessionCenters.delete(cleanCenterId);
           } catch {}
+        } else if (isQrTimeout && !this.savedSessionCenters.has(cleanCenterId)) {
+          // Unscanned QR timed out: clean up immediately and avoid repeated reconnection cycles
+          sessionObj.status = 'disconnected';
+          sessionObj.error = 'QR code expired without being scanned. Please click Connect to generate a new QR code.';
+          sessionObj.reconnectAttempts = 0;
+          sessionObj.restartCount = 0;
+          await this.destroySocketSafely(sessionObj);
         } else if (isRestartRequired) {
           sessionObj.restartCount = (sessionObj.restartCount || 0) + 1;
 
@@ -703,14 +729,11 @@ class BaileysProvider extends IWhatsAppProvider {
       throw new ValidationError("Both 'phone' and 'message' are required.");
     }
 
-    let targetCenterId = centerId ? validateCenterId(centerId).toLowerCase() : null;
-    if (!targetCenterId && this.sessions.size === 1) {
-      targetCenterId = Array.from(this.sessions.keys())[0];
-    }
-
-    if (!targetCenterId) {
+    if (!centerId || typeof centerId !== 'string' || !centerId.trim()) {
       throw new ValidationError('centerId is required in request body to route message to correct WhatsApp session.');
     }
+
+    const targetCenterId = validateCenterId(centerId).toLowerCase();
 
     let session = this.sessions.get(targetCenterId);
 
@@ -731,22 +754,24 @@ class BaileysProvider extends IWhatsAppProvider {
       }
     }
 
-    // Brief readiness wait if session is actively initializing or authenticating
+    // Configurable readiness wait if session is actively initializing or authenticating
     if (
       session &&
       !session.isReady &&
       (session.status === 'initializing' || session.status === 'authenticated')
     ) {
       const waitStart = Date.now();
-      while (!session.isReady && Date.now() - waitStart < 6000) {
+      while (!session.isReady && Date.now() - waitStart < this.coldSessionTimeoutMs) {
         await new Promise((resolve) => setTimeout(resolve, 200));
       }
     }
 
     if (!session || !session.isReady || !session.sock) {
-      throw new ServiceUnavailableError(
-        `WhatsApp Client for center '${targetCenterId}' is not ready. Please scan the QR code in Settings.`
-      );
+      const isConnecting = session && (session.status === 'initializing' || session.status === 'authenticated');
+      const errorMsg = isConnecting
+        ? `WhatsApp Client for center '${targetCenterId}' is not ready (connection in progress). Please wait a moment and retry.`
+        : `WhatsApp Client for center '${targetCenterId}' is not ready. Please scan the QR code in Settings.`;
+      throw new ServiceUnavailableError(errorMsg);
     }
 
     const formattedJid = formatBaileysJid(phone);
@@ -841,6 +866,12 @@ class BaileysProvider extends IWhatsAppProvider {
    * Shuts down all sockets, clears all timers and listeners.
    */
   async shutdown() {
+    this._isShuttingDown = true;
+    for (const timer of this._bootTimers) {
+      clearTimeout(timer);
+    }
+    this._bootTimers.clear();
+
     const destroyPromises = [];
     for (const [, s] of this.sessions.entries()) {
       destroyPromises.push(this.destroySocketSafely(s));

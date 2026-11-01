@@ -179,17 +179,17 @@ describe('Engine Selection & Guarded Integration Test Suite (Phase 3C)', () => {
    * Group 1: Engine Selection & Validation [Mocked]
    * ------------------------------------------------------------------ */
   describe('1. Engine Selection & Validation [Mocked]', () => {
-    it('1.1 Defaults strictly to WWebJSProvider when WHATSAPP_ENGINE is unset or empty', () => {
+    it('1.1 Defaults strictly to BaileysProvider when WHATSAPP_ENGINE is unset or empty', () => {
       const origEngine = process.env.WHATSAPP_ENGINE;
       delete process.env.WHATSAPP_ENGINE;
       try {
         const providerDefault = createProvider(undefined);
-        assert.ok(providerDefault instanceof WWebJSProvider);
-        assert.strictEqual(providerDefault.name, 'wwebjs_remoteauth');
+        assert.ok(providerDefault instanceof BaileysProvider);
+        assert.strictEqual(providerDefault.name, 'baileys_native');
 
         const providerEmpty = createProvider('');
-        assert.ok(providerEmpty instanceof WWebJSProvider);
-        assert.strictEqual(providerEmpty.name, 'wwebjs_remoteauth');
+        assert.ok(providerEmpty instanceof BaileysProvider);
+        assert.strictEqual(providerEmpty.name, 'baileys_native');
       } finally {
         if (origEngine !== undefined) {
           process.env.WHATSAPP_ENGINE = origEngine;
@@ -203,7 +203,7 @@ describe('Engine Selection & Guarded Integration Test Suite (Phase 3C)', () => {
       assert.strictEqual(provider.name, 'wwebjs_remoteauth');
     });
 
-    it('1.3 Instantiates BaileysProvider only when WHATSAPP_ENGINE=baileys is explicitly configured', () => {
+    it('1.3 Instantiates BaileysProvider when WHATSAPP_ENGINE=baileys is explicitly configured', () => {
       const provider = createProvider('baileys');
       assert.ok(provider instanceof BaileysProvider);
       assert.strictEqual(provider.name, 'baileys_native');

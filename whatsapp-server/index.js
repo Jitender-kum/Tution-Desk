@@ -31,8 +31,8 @@ if (!INTERNAL_SECRET || !INTERNAL_SECRET.trim()) {
 /**
  * Creates and validates the configured WhatsApp provider.
  * Supports:
- *  - 'wwebjs' (default when WHATSAPP_ENGINE is unset or empty)
- *  - 'baileys' (explicit opt-in)
+ *  - 'baileys' (default lightweight WebSocket engine when WHATSAPP_ENGINE is unset or empty)
+ *  - 'wwebjs' (legacy Chromium RemoteAuth engine)
  * Rejects unsupported engines at startup rather than silently choosing a fallback.
  *
  * @param {string} [engineName=process.env.WHATSAPP_ENGINE]
@@ -40,7 +40,7 @@ if (!INTERNAL_SECRET || !INTERNAL_SECRET.trim()) {
  * @returns {import('./providers/IWhatsAppProvider')}
  */
 function createProvider(engineName = process.env.WHATSAPP_ENGINE, options = {}) {
-  const engine = (engineName || 'wwebjs').trim().toLowerCase();
+  const engine = (engineName || 'baileys').trim().toLowerCase();
 
   if (engine === 'wwebjs') {
     return new WWebJSProvider({

@@ -424,19 +424,24 @@ export default function SettingsPage() {
     } else if (currentStatus === "connected") {
       // Light keep-alive heartbeat
       delayMs = 15000;
+    } else if (currentStatus === "disconnected") {
+      // Gentle background heartbeat to catch background server reconnects
+      delayMs = 30000;
     }
 
-    // Stop polling if delayMs is null or if there is an error while not actively pairing
-    if (!delayMs || (currentError && !isInit && !isRegen)) {
+    if (!delayMs) {
       return;
     }
+
+    // If an error occurs while idle, back off to 30s instead of abandoning polling permanently
+    const pollDelay = currentError && !isInit && !isRegen ? 30000 : delayMs;
 
     pollTimerRef.current = setTimeout(async () => {
       if (!isMountedRef.current) return;
       await fetchStatus();
       // Schedule subsequent check only after current fetch has completed
       scheduleNextPoll();
-    }, delayMs);
+    }, pollDelay);
   }, [fetchStatus]);
 
   // Initial status fetch once centerId is resolved

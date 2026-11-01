@@ -491,7 +491,7 @@ describe('BaileysProvider Test Suite (Phase 2C - Mocked)', () => {
       assert.strictEqual(status.hasClientProcess, false);
     });
 
-    it('5.4 Normal QR timeout (408 timedOut) transitions to disconnected and triggers backoff reconnect', async () => {
+    it('5.4 Unscanned QR timeout (408 timedOut) transitions cleanly to disconnected without reconnect storm', async () => {
       const provider = new BaileysProvider({
         mongooseInstance: mockEnv.mockMongoose,
         makeSocketFn,
@@ -505,7 +505,7 @@ describe('BaileysProvider Test Suite (Phase 2C - Mocked)', () => {
       let status = await provider.getStatus('center-408');
       assert.strictEqual(status.status, 'qr_ready');
 
-      // 408 timedOut disconnect
+      // 408 timedOut disconnect on unscanned QR
       mockSocket.ev.emit('connection.update', {
         connection: 'close',
         lastDisconnect: { error: { output: { statusCode: 408 } } },
@@ -515,9 +515,12 @@ describe('BaileysProvider Test Suite (Phase 2C - Mocked)', () => {
       assert.strictEqual(status.status, 'disconnected');
       assert.strictEqual(status.ready, false);
       assert.strictEqual(status.qr, null);
+      assert.match(status.error, /QR code expired without being scanned/i);
 
       const sessionObj = provider.sessions.get('center-408');
-      assert.strictEqual(sessionObj.reconnectAttempts, 1);
+      // Unscanned QR timeout must NOT enter backoff reconnect loops
+      assert.strictEqual(sessionObj.reconnectAttempts, 0);
+      assert.strictEqual(sessionObj.reconnectTimer, null);
     });
 
     it('5.5 Logged out (401) immediately purges session and MongoDB auth and does not reconnect', async () => {
