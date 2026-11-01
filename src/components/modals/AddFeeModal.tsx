@@ -371,7 +371,7 @@ export default function AddFeeModal({
                 onChange={(e) => setAmountDue(e.target.value)}
                 placeholder="1500"
                 min="1"
-                step="50"
+                step="any"
                 required
                 className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 pl-8 pr-3.5 py-2.5 text-xs font-bold text-slate-900 font-mono focus:bg-white focus:border-blue-600 focus:outline-none focus:ring-4 focus:ring-blue-100 transition-all"
               />

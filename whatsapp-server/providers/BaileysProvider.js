@@ -140,6 +140,18 @@ class BaileysProvider extends IWhatsAppProvider {
         for (const id of savedCenters) {
           this.savedSessionCenters.add(id);
         }
+
+        // Auto-reconnect registered paired sessions in background on boot (skipped in unit test runs)
+        if (process.env.NODE_ENV !== 'test') {
+          const registeredCenters = typeof this.authStore.listRegisteredSessions === 'function'
+            ? await this.authStore.listRegisteredSessions()
+            : [];
+          for (const regId of registeredCenters) {
+            this.initializeSession(regId).catch((bootErr) => {
+              console.warn(`[BaileysProvider] [Center: ${regId}] Background startup reconnect notice:`, bootErr.message);
+            });
+          }
+        }
       } catch (err) {
         console.warn('⚠️ [BaileysProvider] Could not list saved sessions during init:', err.message);
       }
@@ -636,7 +648,7 @@ class BaileysProvider extends IWhatsAppProvider {
       (session.status === 'initializing' || session.status === 'authenticated')
     ) {
       const waitStart = Date.now();
-      while (!session.isReady && Date.now() - waitStart < 3000) {
+      while (!session.isReady && Date.now() - waitStart < 6000) {
         await new Promise((resolve) => setTimeout(resolve, 200));
       }
     }
@@ -656,8 +668,8 @@ class BaileysProvider extends IWhatsAppProvider {
     if (typeof session.sock.onWhatsApp === 'function') {
       try {
         const results = await session.sock.onWhatsApp(formattedJid);
-        const registered = Array.isArray(results) && results.length > 0 && results[0]?.exists;
-        if (!registered) {
+        // Specifically check if WhatsApp explicitly confirmed the number does NOT exist
+        if (Array.isArray(results) && results.length > 0 && results[0]?.exists === false) {
           throw new NotRegisteredError();
         }
       } catch (err) {

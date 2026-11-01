@@ -180,13 +180,21 @@ describe('Engine Selection & Guarded Integration Test Suite (Phase 3C)', () => {
    * ------------------------------------------------------------------ */
   describe('1. Engine Selection & Validation [Mocked]', () => {
     it('1.1 Defaults strictly to WWebJSProvider when WHATSAPP_ENGINE is unset or empty', () => {
-      const providerDefault = createProvider(undefined);
-      assert.ok(providerDefault instanceof WWebJSProvider);
-      assert.strictEqual(providerDefault.name, 'wwebjs_remoteauth');
+      const origEngine = process.env.WHATSAPP_ENGINE;
+      delete process.env.WHATSAPP_ENGINE;
+      try {
+        const providerDefault = createProvider(undefined);
+        assert.ok(providerDefault instanceof WWebJSProvider);
+        assert.strictEqual(providerDefault.name, 'wwebjs_remoteauth');
 
-      const providerEmpty = createProvider('');
-      assert.ok(providerEmpty instanceof WWebJSProvider);
-      assert.strictEqual(providerEmpty.name, 'wwebjs_remoteauth');
+        const providerEmpty = createProvider('');
+        assert.ok(providerEmpty instanceof WWebJSProvider);
+        assert.strictEqual(providerEmpty.name, 'wwebjs_remoteauth');
+      } finally {
+        if (origEngine !== undefined) {
+          process.env.WHATSAPP_ENGINE = origEngine;
+        }
+      }
     });
 
     it('1.2 Instantiates WWebJSProvider when WHATSAPP_ENGINE=wwebjs', () => {
@@ -466,5 +474,14 @@ describe('Engine Selection & Guarded Integration Test Suite (Phase 3C)', () => {
       assert.strictEqual(sockB.isEnded, true, 'Socket B must be closed');
       assert.strictEqual(provider.sessions.size, 0, 'Sessions map must be cleared');
     });
+  });
+
+  after(async () => {
+    const { provider } = require('../index');
+    if (provider && typeof provider.shutdown === 'function') {
+      await provider.shutdown();
+    }
+    const mongoose = require('mongoose');
+    await mongoose.disconnect();
   });
 });

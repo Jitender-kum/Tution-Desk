@@ -58,6 +58,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Validate amountDue for all fee types
+    if (body.amountDue !== undefined) {
+      const parsedAmount = Number(body.amountDue);
+      if (isNaN(parsedAmount) || parsedAmount <= 0) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Amount due must be a valid positive number greater than 0",
+          },
+          { status: 400 }
+        );
+      }
+    }
+
     // If recurring monthly fee, route through idempotent feeService
     if (feeType === "monthly_recurring") {
       if (!body.studentId) {
@@ -108,10 +122,23 @@ export async function POST(request: NextRequest) {
     }
 
     // For non-recurring fee types (adhoc, registration, advance),
+    // ensure amountDue is explicitly provided and greater than 0
+    const nonRecurringAmount = Number(body.amountDue);
+    if (body.amountDue === undefined || isNaN(nonRecurringAmount) || nonRecurringAmount <= 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Amount due is required and must be a valid positive number greater than 0",
+        },
+        { status: 400 }
+      );
+    }
+
     // ensure billingMonth is NOT set so it cannot suppress legitimate monthly recurring billing
     const { billingMonth: _omittedMonth, ...cleanBody } = body;
     const newFee = await Fee.create({
       ...cleanBody,
+      amountDue: nonRecurringAmount,
       feeType,
       isAdvance: feeType === "advance" ? true : Boolean(body.isAdvance),
       centerId: targetCenterId,

@@ -124,6 +124,30 @@ class BaileysMongoAuthStore {
   }
 
   /**
+   * Discovers centerIds with confirmed registered paired credentials.
+   * @returns {Promise<string[]>}
+   */
+  async listRegisteredSessions() {
+    try {
+      const docs = await this.collection.find({ key: 'creds' }, { projection: { centerId: 1, data: 1 } }).toArray();
+      const registered = [];
+      for (const d of docs) {
+        if (!d.data) continue;
+        try {
+          const parsed = JSON.parse(d.data);
+          if (parsed && (parsed.me || parsed.registered === true || parsed.isRegistered === true)) {
+            registered.push(d.centerId);
+          }
+        } catch {}
+      }
+      return registered;
+    } catch (err) {
+      console.warn('[BaileysMongoAuthStore] Could not list registered Baileys sessions:', err.message);
+      return [];
+    }
+  }
+
+  /**
    * Deletes all saved credentials and keys for a specific center (explicit logout/unlink).
    * @param {string} centerId
    * @returns {Promise<{ deletedCount: number }>}

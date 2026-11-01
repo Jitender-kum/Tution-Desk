@@ -83,7 +83,10 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const upstreamUrl = `${WHATSAPP_SERVICE_URL}/send-message`;
+    const baseUrl = (
+      process.env.WHATSAPP_SERVICE_URL || "http://localhost:3005"
+    ).replace(/\/+$/, "");
+    const upstreamUrl = `${baseUrl}/send-message`;
 
     // Note: centerId is strictly derived from the verified session, ignoring any client input
     const res = await fetch(upstreamUrl, {

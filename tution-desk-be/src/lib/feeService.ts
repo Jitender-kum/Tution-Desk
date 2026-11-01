@@ -1,8 +1,8 @@
 import mongoose, { Types } from "mongoose";
 import crypto from "crypto";
 import connectDB from "./db.ts";
-import Fee, { IFeeDocument } from "../models/Fee.ts";
-import Student, { IStudentDocument } from "../models/Student.ts";
+import Fee, { type IFeeDocument } from "../models/Fee.ts";
+import Student, { type IStudentDocument } from "../models/Student.ts";
 import Center from "../models/Center.ts";
 import FeeCreationLock, { verifyLockIndexIntegrity } from "../models/FeeCreationLock.ts";
 import {

@@ -6,8 +6,10 @@
  * Implements a strict fail-closed simulation guard.
  */
 
-const WHATSAPP_SERVICE_URL =
-  process.env.WHATSAPP_SERVICE_URL || "http://localhost:3005";
+function getWhatsappServiceUrl(): string {
+  const raw = process.env.WHATSAPP_SERVICE_URL || "http://localhost:3005";
+  return raw.trim().replace(/\/+$/, "");
+}
 
 /**
  * Strict fail-closed guard for live WhatsApp dispatches.
@@ -58,6 +60,14 @@ function getInternalHeaders(): Record<string, string> {
   };
 }
 
+function sanitizePhoneNumber(phone: string | number): string {
+  return String(phone || "").replace(/\D/g, "");
+}
+
+function maskPhoneNumber(phone: string): string {
+  return phone && phone.length >= 4 ? `***${phone.slice(-4)}` : "****";
+}
+
 export interface SendWelcomeMessageResult {
   success: boolean;
   centerId: string;
@@ -87,17 +97,33 @@ export async function sendWelcomeMessage(
     "http://localhost:3000";
 
   const magicLink = studentId ? `${appUrl}/p/${studentId}` : "";
+  const cleanDigits = sanitizePhoneNumber(phone);
+  const maskedPhone = maskPhoneNumber(cleanDigits);
+
+  if (cleanDigits.length < 10 || cleanDigits.length > 15) {
+    return {
+      success: false,
+      simulated: false,
+      accepted: false,
+      delivered: false,
+      centerId,
+      phone: maskedPhone,
+      magicLink,
+      message,
+      error: "Invalid recipient phone number: must contain 10 to 15 digits",
+    };
+  }
 
   // Fail-closed simulation guard: zero network requests unless explicitly opted into live mode
   if (!isLiveDispatchEnabled()) {
-    logSimulatedDispatch("welcome_message", centerId, phone, message);
+    logSimulatedDispatch("welcome_message", centerId, cleanDigits, message);
     return {
       success: false,
       simulated: true,
       accepted: false,
       delivered: false,
       centerId,
-      phone,
+      phone: maskedPhone,
       magicLink,
       message,
       messageId: `sim_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -106,22 +132,24 @@ export async function sendWelcomeMessage(
     };
   }
 
+  const serviceUrl = getWhatsappServiceUrl();
   try {
-    const response = await fetch(`${WHATSAPP_SERVICE_URL}/send-message`, {
+    const response = await fetch(`${serviceUrl}/send-message`, {
       method: "POST",
       headers: getInternalHeaders(),
       body: JSON.stringify({
         centerId,
-        phone,
+        phone: cleanDigits,
         message,
       }),
+      signal: AbortSignal.timeout(10000),
     });
 
     const data = await response.json().catch(() => null);
 
     if (response.ok && data?.success) {
       console.log(
-        `[WHATSAPP SERVICE] [Center: ${centerId}] Dispatched message! ID: ${data.messageId}`
+        `[WHATSAPP SERVICE] [Center: ${centerId}] Dispatched message! Recipient: ${maskedPhone} | ID: ${data.messageId}`
       );
       return {
         success: true,
@@ -129,7 +157,7 @@ export async function sendWelcomeMessage(
         accepted: true,
         delivered: false,
         centerId,
-        phone,
+        phone: maskedPhone,
         magicLink,
         message,
         messageId: data.messageId,
@@ -146,7 +174,7 @@ export async function sendWelcomeMessage(
         accepted: false,
         delivered: false,
         centerId,
-        phone,
+        phone: maskedPhone,
         magicLink,
         message,
         error: errorMsg,
@@ -156,7 +184,7 @@ export async function sendWelcomeMessage(
     const errorMsg =
       err instanceof Error ? err.message : "WhatsApp microservice unreachable";
     console.warn(
-      `[WHATSAPP SERVICE ERROR] Microservice at ${WHATSAPP_SERVICE_URL} unreachable for welcome message: ${errorMsg}`
+      `[WHATSAPP SERVICE ERROR] Microservice at ${serviceUrl} unreachable for welcome message: ${errorMsg}`
     );
     return {
       success: false,
@@ -164,7 +192,7 @@ export async function sendWelcomeMessage(
       accepted: false,
       delivered: false,
       centerId,
-      phone,
+      phone: maskedPhone,
       magicLink,
       message,
       error: errorMsg,
@@ -189,9 +217,22 @@ export async function sendCustomWhatsAppMessage(
   phone: string,
   message: string
 ): Promise<SendCustomMessageResult> {
+  const cleanDigits = sanitizePhoneNumber(phone);
+  const maskedPhone = maskPhoneNumber(cleanDigits);
+
+  if (cleanDigits.length < 10 || cleanDigits.length > 15) {
+    return {
+      success: false,
+      simulated: false,
+      accepted: false,
+      delivered: false,
+      error: "Invalid recipient phone number: must contain 10 to 15 digits",
+    };
+  }
+
   // Fail-closed simulation guard
   if (!isLiveDispatchEnabled()) {
-    logSimulatedDispatch("custom_message", centerId, phone, message);
+    logSimulatedDispatch("custom_message", centerId, cleanDigits, message);
     return {
       success: false,
       simulated: true,
@@ -202,11 +243,13 @@ export async function sendCustomWhatsAppMessage(
     };
   }
 
+  const serviceUrl = getWhatsappServiceUrl();
   try {
-    const response = await fetch(`${WHATSAPP_SERVICE_URL}/send-message`, {
+    const response = await fetch(`${serviceUrl}/send-message`, {
       method: "POST",
       headers: getInternalHeaders(),
-      body: JSON.stringify({ centerId, phone, message }),
+      body: JSON.stringify({ centerId, phone: cleanDigits, message }),
+      signal: AbortSignal.timeout(10000),
     });
 
     const data = await response.json().catch(() => null);
@@ -269,16 +312,32 @@ export async function sendFeeReminder(
     amount
   ).toLocaleString("en-IN")} for ${studentName} is due on ${dueDate}.${portalText}\n\nIf you have already paid, please ignore this reminder. Thank you!`;
 
+  const cleanDigits = sanitizePhoneNumber(phone);
+  const maskedPhone = maskPhoneNumber(cleanDigits);
+
+  if (cleanDigits.length < 10 || cleanDigits.length > 15) {
+    return {
+      success: false,
+      simulated: false,
+      accepted: false,
+      delivered: false,
+      centerId,
+      phone: maskedPhone,
+      message,
+      error: "Invalid recipient phone number: must contain 10 to 15 digits",
+    };
+  }
+
   // Fail-closed simulation guard: zero network requests unless explicitly opted into live mode
   if (!isLiveDispatchEnabled()) {
-    logSimulatedDispatch("fee_reminder", centerId, phone, message);
+    logSimulatedDispatch("fee_reminder", centerId, cleanDigits, message);
     return {
       success: false,
       simulated: true,
       accepted: false,
       delivered: false,
       centerId,
-      phone,
+      phone: maskedPhone,
       message,
       messageId: `sim_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       error:
@@ -286,18 +345,20 @@ export async function sendFeeReminder(
     };
   }
 
+  const serviceUrl = getWhatsappServiceUrl();
   try {
-    const response = await fetch(`${WHATSAPP_SERVICE_URL}/send-message`, {
+    const response = await fetch(`${serviceUrl}/send-message`, {
       method: "POST",
       headers: getInternalHeaders(),
-      body: JSON.stringify({ centerId, phone, message }),
+      body: JSON.stringify({ centerId, phone: cleanDigits, message }),
+      signal: AbortSignal.timeout(10000),
     });
 
     const data = await response.json().catch(() => null);
 
     if (response.ok && data?.success) {
       console.log(
-        `[WHATSAPP SERVICE] [Center: ${centerId}] Fee reminder dispatched! ID: ${data.messageId}`
+        `[WHATSAPP SERVICE] [Center: ${centerId}] Fee reminder dispatched! Recipient: ${maskedPhone} | ID: ${data.messageId}`
       );
       return {
         success: true,
@@ -305,7 +366,7 @@ export async function sendFeeReminder(
         accepted: true,
         delivered: false,
         centerId,
-        phone,
+        phone: maskedPhone,
         message,
         messageId: data.messageId,
       };
@@ -321,7 +382,7 @@ export async function sendFeeReminder(
         accepted: false,
         delivered: false,
         centerId,
-        phone,
+        phone: maskedPhone,
         message,
         error: errorMsg,
       };
@@ -330,7 +391,7 @@ export async function sendFeeReminder(
     const errorMsg =
       err instanceof Error ? err.message : "WhatsApp microservice unreachable";
     console.warn(
-      `[WHATSAPP SERVICE ERROR] Microservice at ${WHATSAPP_SERVICE_URL} unreachable for fee reminder: ${errorMsg}`
+      `[WHATSAPP SERVICE ERROR] Microservice at ${serviceUrl} unreachable for fee reminder: ${errorMsg}`
     );
     return {
       success: false,
@@ -338,7 +399,7 @@ export async function sendFeeReminder(
       accepted: false,
       delivered: false,
       centerId,
-      phone,
+      phone: maskedPhone,
       message,
       error: errorMsg,
     };
@@ -382,16 +443,32 @@ export async function sendTestResult(
 
   const message = `Test Result Announced 📝\n\nDear Parent, ${studentName}'s result for "${testName}" has been evaluated.\n\nScore: ${marks} / ${maxMarks}${percentage}${portalText}\n\nKeep encouraging ${studentName} for continuous improvement! 🌟`;
 
+  const cleanDigits = sanitizePhoneNumber(phone);
+  const maskedPhone = maskPhoneNumber(cleanDigits);
+
+  if (cleanDigits.length < 10 || cleanDigits.length > 15) {
+    return {
+      success: false,
+      simulated: false,
+      accepted: false,
+      delivered: false,
+      centerId,
+      phone: maskedPhone,
+      message,
+      error: "Invalid recipient phone number: must contain 10 to 15 digits",
+    };
+  }
+
   // Fail-closed simulation guard: zero network requests unless explicitly opted into live mode
   if (!isLiveDispatchEnabled()) {
-    logSimulatedDispatch("test_result", centerId, phone, message);
+    logSimulatedDispatch("test_result", centerId, cleanDigits, message);
     return {
       success: false,
       simulated: true,
       accepted: false,
       delivered: false,
       centerId,
-      phone,
+      phone: maskedPhone,
       message,
       messageId: `sim_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       error:
@@ -399,18 +476,20 @@ export async function sendTestResult(
     };
   }
 
+  const serviceUrl = getWhatsappServiceUrl();
   try {
-    const response = await fetch(`${WHATSAPP_SERVICE_URL}/send-message`, {
+    const response = await fetch(`${serviceUrl}/send-message`, {
       method: "POST",
       headers: getInternalHeaders(),
-      body: JSON.stringify({ centerId, phone, message }),
+      body: JSON.stringify({ centerId, phone: cleanDigits, message }),
+      signal: AbortSignal.timeout(10000),
     });
 
     const data = await response.json().catch(() => null);
 
     if (response.ok && data?.success) {
       console.log(
-        `[WHATSAPP SERVICE] [Center: ${centerId}] Test result dispatched! ID: ${data.messageId}`
+        `[WHATSAPP SERVICE] [Center: ${centerId}] Test result dispatched! Recipient: ${maskedPhone} | ID: ${data.messageId}`
       );
       return {
         success: true,
@@ -418,7 +497,7 @@ export async function sendTestResult(
         accepted: true,
         delivered: false,
         centerId,
-        phone,
+        phone: maskedPhone,
         message,
         messageId: data.messageId,
       };
@@ -434,7 +513,7 @@ export async function sendTestResult(
         accepted: false,
         delivered: false,
         centerId,
-        phone,
+        phone: maskedPhone,
         message,
         error: errorMsg,
       };
@@ -443,7 +522,7 @@ export async function sendTestResult(
     const errorMsg =
       err instanceof Error ? err.message : "WhatsApp microservice unreachable";
     console.warn(
-      `[WHATSAPP SERVICE ERROR] Microservice at ${WHATSAPP_SERVICE_URL} unreachable for test result: ${errorMsg}`
+      `[WHATSAPP SERVICE ERROR] Microservice at ${serviceUrl} unreachable for test result: ${errorMsg}`
     );
     return {
       success: false,
@@ -451,7 +530,7 @@ export async function sendTestResult(
       accepted: false,
       delivered: false,
       centerId,
-      phone,
+      phone: maskedPhone,
       message,
       error: errorMsg,
     };

@@ -57,6 +57,8 @@ export async function POST(request: NextRequest) {
       const studentName = student.name || "Student";
 
       if (parentPhone) {
+        const maskedPhone =
+          parentPhone.length >= 4 ? `***${parentPhone.slice(-4)}` : "****";
         try {
           const res = await dispatchFeeReminder({
             feeId: fee._id,
@@ -75,7 +77,7 @@ export async function POST(request: NextRequest) {
           dispatchResults.push({
             feeId: String(fee._id),
             studentName,
-            phone: parentPhone,
+            phone: maskedPhone,
             success: res.success,
             simulated: Boolean(res.simulated),
             status: res.status,
@@ -87,13 +89,12 @@ export async function POST(request: NextRequest) {
         } catch (err: unknown) {
           const errMsg = err instanceof Error ? err.message : "Dispatch error";
           console.error(
-            `[REMIND-ALL ERROR] Failed sending to parent of ${studentName}:`,
-            err
+            `[REMIND-ALL ERROR] Center: ${cleanCenterId} | Fee: ${fee._id} | Recipient: ${maskedPhone} | Error: ${errMsg}`
           );
           dispatchResults.push({
             feeId: String(fee._id),
             studentName,
-            phone: parentPhone,
+            phone: maskedPhone,
             success: false,
             simulated: false,
             accepted: false,
@@ -104,13 +105,18 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const payload = {
+      sentCount,
+      simulatedCount,
+      totalPending: pendingFees.length,
+      results: dispatchResults,
+    };
+
     return NextResponse.json(
       {
         success: true,
-        sentCount,
-        simulatedCount,
-        totalPending: pendingFees.length,
-        results: dispatchResults,
+        data: payload,
+        ...payload,
       },
       {
         status: 200,

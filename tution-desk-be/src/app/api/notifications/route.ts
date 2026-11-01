@@ -62,8 +62,9 @@ export async function GET(request: NextRequest) {
     // 2. Alert for WhatsApp Microservice Status
     let isWhatsappConnected = false;
     try {
-      const whatsappServiceUrl =
-        process.env.WHATSAPP_SERVICE_URL || "http://localhost:3005";
+      const whatsappServiceUrl = (
+        process.env.WHATSAPP_SERVICE_URL || "http://localhost:3005"
+      ).replace(/\/+$/, "");
       const internalSecret = process.env.WHATSAPP_INTERNAL_SECRET;
       const headers: Record<string, string> = {};
       if (internalSecret && internalSecret.trim()) {

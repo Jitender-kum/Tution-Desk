@@ -196,12 +196,35 @@ export default function DashboardPage() {
   const handleSendFeeReminders = async () => {
     setIsSendingReminders(true);
     try {
-      const res = await apiClient<{ sentCount: number }>("/fees/remind-all", {
+      const res = await apiClient<{
+        sentCount: number;
+        simulatedCount: number;
+        totalPending: number;
+      }>("/fees/remind-all", {
         method: "POST",
       });
 
-      const count = res.data?.sentCount || metrics.overdueCount || 0;
-      setToastMessage(`Sent ${count} WhatsApp fee reminders successfully!`);
+      const sentCount = res.data?.sentCount ?? (res as any).sentCount ?? 0;
+      const simulatedCount =
+        res.data?.simulatedCount ?? (res as any).simulatedCount ?? 0;
+
+      if (sentCount > 0) {
+        setToastMessage(
+          `Dispatched ${sentCount} fee reminder${
+            sentCount > 1 ? "s" : ""
+          } to WhatsApp provider.`
+        );
+      } else if (simulatedCount > 0) {
+        setToastMessage(
+          `[Simulation] ${simulatedCount} fee reminder${
+            simulatedCount > 1 ? "s" : ""
+          } simulated (WhatsApp live delivery disabled).`
+        );
+      } else {
+        setToastMessage(
+          "No reminders could be dispatched. Check WhatsApp engine connection or active cooldowns."
+        );
+      }
       setTimeout(() => setToastMessage(null), 4500);
 
       // Re-fetch dashboard data

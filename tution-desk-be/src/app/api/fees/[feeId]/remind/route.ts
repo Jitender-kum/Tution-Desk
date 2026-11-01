@@ -86,15 +86,20 @@ export async function POST(
       );
     }
 
+    const responsePayload = {
+      status: result.status,
+      providerMessageId: result.providerMessageId,
+      simulated: result.simulated,
+      message: result.simulated
+        ? "Simulated fee reminder dispatched (simulation mode)"
+        : "Fee reminder dispatched to WhatsApp provider successfully",
+    };
+
     return NextResponse.json(
       {
         success: true,
-        status: result.status,
-        providerMessageId: result.providerMessageId,
-        simulated: result.simulated,
-        message: result.simulated
-          ? "Simulated fee reminder dispatched (simulation mode)"
-          : "Fee reminder dispatched to WhatsApp provider successfully",
+        data: responsePayload,
+        ...responsePayload,
       },
       { status: 200, headers: corsHeaders }
     );

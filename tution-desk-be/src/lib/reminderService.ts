@@ -3,12 +3,12 @@ import connectDB from "./db.ts";
 import Fee from "../models/Fee.ts";
 import Student from "../models/Student.ts";
 import FeeReminderLog, {
-  ReminderTriggerType,
-  ReminderDispatchStatus,
+  type ReminderTriggerType,
+  type ReminderDispatchStatus,
 } from "../models/FeeReminderLog.ts";
 import {
   sendFeeReminder,
-  SendFeeReminderResult,
+  type SendFeeReminderResult,
 } from "./whatsappService.ts";
 import {
   isWithin24HourCooldown,
@@ -263,20 +263,34 @@ export async function dispatchFeeReminder(
     );
 
     if (res.success || res.simulated) {
-      // Outcome: provider_accepted (or simulated)
-      // IMPORTANT: Provider acceptance must NEVER be represented as confirmed delivery.
-      const outcomeStatus: ReminderDispatchStatus = "provider_accepted";
+      // In simulation mode, status is "attempted" (simulated), whereas real provider acceptance is "provider_accepted"
+      // Provider acceptance must NEVER be represented as confirmed delivery.
+      const outcomeStatus: ReminderDispatchStatus = res.simulated
+        ? "attempted"
+        : "provider_accepted";
 
-      await FeeModel.updateOne(
-        { _id: fee._id },
-        {
-          $set: {
-            lastReminderSentAt: now,
-            reminderLockUntil: null, // Release claim lock cleanly
-          },
-          $inc: { reminderCount: 1 },
-        }
-      );
+      if (res.simulated) {
+        // In simulation mode, release the claim lock cleanly without advancing cooldown or locking out real delivery
+        await FeeModel.updateOne(
+          { _id: fee._id },
+          {
+            $set: {
+              reminderLockUntil: null,
+            },
+          }
+        );
+      } else {
+        await FeeModel.updateOne(
+          { _id: fee._id },
+          {
+            $set: {
+              lastReminderSentAt: now,
+              reminderLockUntil: null, // Release claim lock cleanly
+            },
+            $inc: { reminderCount: 1 },
+          }
+        );
+      }
 
       const log = await FeeReminderLogModel.create({
         centerId,

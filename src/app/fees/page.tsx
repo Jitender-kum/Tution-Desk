@@ -382,19 +382,32 @@ export default function FeesPage() {
         throw new Error(res.error || "Failed to dispatch fee reminder.");
       }
 
-      // Successful dispatch accepted by provider
-      setSentReminders((prev) => ({
-        ...prev,
-        [feeId]: true,
-      }));
+      // Process response outcome
+      const isSimulated = Boolean(
+        res.data?.simulated ?? (res as any).simulated
+      );
+      const maskedPhone =
+        student.parentPhone && student.parentPhone.length >= 4
+          ? `***${student.parentPhone.slice(-4)}`
+          : "****";
 
-      setCooldownConfirmFee(null);
+      if (isSimulated) {
+        setCooldownConfirmFee(null);
+        setToastMessage(
+          `[Simulation] Fee reminder simulated for ${student.name}'s parent (${maskedPhone}) (live WhatsApp disabled).`
+        );
+      } else {
+        // Successful dispatch accepted by provider
+        setSentReminders((prev) => ({
+          ...prev,
+          [feeId]: true,
+        }));
+        setCooldownConfirmFee(null);
+        setToastMessage(
+          `Fee reminder accepted by WhatsApp provider for ${student.name}'s parent (${maskedPhone})!`
+        );
+      }
 
-      const toastText = res.data?.simulated
-        ? `[Simulation] Fee reminder queued for ${student.name}'s parent (${student.parentPhone})!`
-        : `Fee reminder accepted by WhatsApp provider for ${student.name}'s parent (${student.parentPhone})!`;
-
-      setToastMessage(toastText);
       setTimeout(() => setToastMessage(null), 4000);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to send reminder";
@@ -419,23 +432,43 @@ export default function FeesPage() {
     setIsSendingBulk(true);
 
     try {
-      const res = await apiClient<{ sentCount: number }>("/fees/remind-all", {
+      const res = await apiClient<{
+        sentCount: number;
+        simulatedCount: number;
+        totalPending: number;
+      }>("/fees/remind-all", {
         method: "POST",
       });
 
-      setIsGlobalSent(true);
-      const updated: Record<string, boolean> = {};
-      pendingStudents.forEach((s) => {
-        if (s?.id) {
-          updated[s.id] = true;
-        }
-      });
-      setSentReminders(updated);
+      const sentCount = res.data?.sentCount ?? (res as any).sentCount ?? 0;
+      const simulatedCount =
+        res.data?.simulatedCount ?? (res as any).simulatedCount ?? 0;
 
-      const count = res.data?.sentCount ?? pendingStudents.length;
-      setToastMessage(
-        `Sent ${count} WhatsApp fee reminders successfully with VIP portal links!`
-      );
+      if (sentCount > 0) {
+        setIsGlobalSent(true);
+        const updated: Record<string, boolean> = {};
+        pendingStudents.forEach((s) => {
+          if (s?.id) {
+            updated[s.id] = true;
+          }
+        });
+        setSentReminders(updated);
+        setToastMessage(
+          `Dispatched ${sentCount} fee reminder${
+            sentCount > 1 ? "s" : ""
+          } to WhatsApp provider with VIP portal links!`
+        );
+      } else if (simulatedCount > 0) {
+        setToastMessage(
+          `[Simulation] ${simulatedCount} fee reminder${
+            simulatedCount > 1 ? "s" : ""
+          } simulated (WhatsApp live delivery disabled).`
+        );
+      } else {
+        setToastMessage(
+          "No reminders could be dispatched. WhatsApp service is disconnected or active cooldowns apply."
+        );
+      }
       setTimeout(() => setToastMessage(null), 4500);
     } catch (err: unknown) {
       const msg =

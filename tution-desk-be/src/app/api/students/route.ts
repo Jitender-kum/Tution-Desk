@@ -38,11 +38,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const cleanParentWhatsApp = String(parentWhatsApp).replace(/\D/g, "");
+    if (cleanParentWhatsApp.length < 10 || cleanParentWhatsApp.length > 15) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "parentWhatsApp must be a valid 10 to 15 digit phone number",
+        },
+        { status: 400 }
+      );
+    }
+
     const newStudent = await Student.create({
       centerId: targetCenterId,
       name: name.trim(),
       batch: batch.trim(),
-      parentWhatsApp: parentWhatsApp.trim(),
+      parentWhatsApp: cleanParentWhatsApp,
       isActive: isActive !== undefined ? Boolean(isActive) : true,
       joiningDate: joiningDate ? new Date(joiningDate) : new Date(),
       monthlyFee: monthlyFee !== undefined ? Number(monthlyFee) : 0,
@@ -76,25 +87,37 @@ export async function POST(request: NextRequest) {
         newStudent._id.toString()
       )
         .then((result) => {
+          const maskedPhone =
+            newStudent.parentWhatsApp && newStudent.parentWhatsApp.length >= 4
+              ? `***${newStudent.parentWhatsApp.slice(-4)}`
+              : "****";
           if (result.simulated) {
             console.log(
-              `[ADMISSION NOTIFICATION SIMULATED] Student: ${newStudent.name} (${newStudent._id}) | Center: ${newStudent.centerId} | Simulation mode active.`
+              `[ADMISSION NOTIFICATION SIMULATED] Student: ${newStudent.name} (${newStudent._id}) | Center: ${newStudent.centerId} | Recipient: ${maskedPhone} | Simulation mode active.`
             );
           } else if (result.success) {
             console.log(
-              `[ADMISSION NOTIFICATION DISPATCHED] Student: ${newStudent.name} (${newStudent._id}) | Center: ${newStudent.centerId} | Provider accepted ID: ${result.messageId}`
+              `[ADMISSION NOTIFICATION DISPATCHED] Student: ${newStudent.name} (${newStudent._id}) | Center: ${newStudent.centerId} | Recipient: ${maskedPhone} | Provider accepted ID: ${result.messageId}`
             );
           } else {
             console.warn(
-              `[ADMISSION NOTIFICATION FAILED] Student: ${newStudent.name} (${newStudent._id}) | Center: ${newStudent.centerId} | Error: ${result.error || "Unknown send failure"}`
+              `[ADMISSION NOTIFICATION FAILED] Student: ${newStudent.name} (${newStudent._id}) | Center: ${newStudent.centerId} | Recipient: ${maskedPhone} | Error: ${result.error || "Unknown send failure"}`
             );
           }
         })
         .catch((whatsappErr) => {
-          console.error("Async WhatsApp Welcome Error:", whatsappErr);
+          const errMsg =
+            whatsappErr instanceof Error ? whatsappErr.message : "Unknown error";
+          console.error(
+            `[ADMISSION NOTIFICATION ERROR] Center: ${newStudent.centerId} | Student ID: ${newStudent._id} | Error: ${errMsg}`
+          );
         });
     } catch (dispatchErr) {
-      console.error("Failed to initiate WhatsApp Welcome Message:", dispatchErr);
+      const errMsg =
+        dispatchErr instanceof Error ? dispatchErr.message : "Unknown error";
+      console.error(
+        `[ADMISSION NOTIFICATION INIT ERROR] Center: ${targetCenterId} | Error: ${errMsg}`
+      );
     }
 
     return NextResponse.json(
