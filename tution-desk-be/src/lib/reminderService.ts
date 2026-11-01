@@ -8,6 +8,7 @@ import FeeReminderLog, {
 } from "../models/FeeReminderLog.ts";
 import {
   sendFeeReminder,
+  buildMagicLink,
   type SendFeeReminderResult,
 } from "./whatsappService.ts";
 import {
@@ -233,11 +234,6 @@ export async function dispatchFeeReminder(
   }
 
   // 7. Format message parameters
-  const appUrl =
-    process.env.NEXT_PUBLIC_APP_URL ||
-    process.env.APP_URL ||
-    "http://localhost:3000";
-
   const studentName = student.name || "Student";
   const amountDue = fee.amountDue || 0;
   const formattedDueDate = fee.dueDate
@@ -247,7 +243,7 @@ export async function dispatchFeeReminder(
         year: "numeric",
       })
     : "Immediate";
-  const magicLink = student._id ? `${appUrl}/p/${student._id}` : "";
+  const magicLink = buildMagicLink(student._id);
 
   const send = options.sendFn || sendFeeReminder;
 

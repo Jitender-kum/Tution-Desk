@@ -12,6 +12,49 @@ function getWhatsappServiceUrl(): string {
 }
 
 /**
+ * Resolves the canonical public frontend application base URL for parent magic links.
+ * Priority order:
+ * 1. process.env.NEXT_PUBLIC_APP_URL
+ * 2. process.env.APP_URL
+ * 3. process.env.FRONTEND_URL
+ * 4. Vercel deployment variables (VERCEL_PROJECT_PRODUCTION_URL, VERCEL_URL)
+ * 5. Fallback: http://localhost:3000 (local development default only)
+ */
+export function getAppBaseUrl(): string {
+  const raw =
+    process.env.NEXT_PUBLIC_APP_URL ||
+    process.env.APP_URL ||
+    process.env.FRONTEND_URL ||
+    (process.env.VERCEL_PROJECT_PRODUCTION_URL
+      ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+      : null) ||
+    (process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : null) ||
+    "http://localhost:3000";
+
+  const trimmed = raw.trim().replace(/\/+$/, "");
+  if (!/^https?:\/\//i.test(trimmed)) {
+    return `https://${trimmed}`;
+  }
+  return trimmed;
+}
+
+/**
+ * Generates the canonical Parent VIP Portal magic link for a given student ID.
+ */
+export function buildMagicLink(
+  studentId?: string | { toString(): string } | null
+): string {
+  if (!studentId) return "";
+  const idStr =
+    typeof studentId === "string" ? studentId.trim() : studentId.toString().trim();
+  if (!idStr) return "";
+  const baseUrl = getAppBaseUrl();
+  return `${baseUrl}/p/${idStr}`;
+}
+
+/**
  * Strict fail-closed guard for live WhatsApp dispatches.
  * Real outbound dispatch requires BOTH:
  * 1. WHATSAPP_MODE === "live" (explicitly configured)
@@ -91,12 +134,7 @@ export async function sendWelcomeMessage(
   message: string,
   studentId?: string
 ): Promise<SendWelcomeMessageResult> {
-  const appUrl =
-    process.env.NEXT_PUBLIC_APP_URL ||
-    process.env.APP_URL ||
-    "http://localhost:3000";
-
-  const magicLink = studentId ? `${appUrl}/p/${studentId}` : "";
+  const magicLink = buildMagicLink(studentId);
   const cleanDigits = sanitizePhoneNumber(phone);
   const maskedPhone = maskPhoneNumber(cleanDigits);
 

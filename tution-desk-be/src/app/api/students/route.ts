@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import connectDB from "@/lib/db";
 import Student from "@/models/Student";
 import Center, { DEFAULT_ADMISSION_TEMPLATE } from "@/models/Center";
-import { sendWelcomeMessage, formatTemplate } from "@/lib/whatsappService";
+import { sendWelcomeMessage, formatTemplate, buildMagicLink } from "@/lib/whatsappService";
 import { getAuthenticatedCenterId } from "@/lib/auth";
 
 export async function OPTIONS() {
@@ -69,11 +69,7 @@ export async function POST(request: NextRequest) {
         center?.welcomeMessageTemplate ||
         DEFAULT_ADMISSION_TEMPLATE;
 
-      const appUrl =
-        process.env.NEXT_PUBLIC_APP_URL ||
-        process.env.APP_URL ||
-        "http://localhost:3000";
-      const magicLink = `${appUrl}/p/${newStudent._id.toString()}`;
+      const magicLink = buildMagicLink(newStudent._id);
 
       const customMessage = formatTemplate(template, {
         studentName: newStudent.name,
