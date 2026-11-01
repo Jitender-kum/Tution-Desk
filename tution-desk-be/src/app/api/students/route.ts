@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import connectDB from "@/lib/db";
 import Student from "@/models/Student";
-import Center from "@/models/Center";
-import { sendWelcomeMessage } from "@/lib/whatsappService";
+import Center, { DEFAULT_ADMISSION_TEMPLATE } from "@/models/Center";
+import { sendWelcomeMessage, formatTemplate } from "@/lib/whatsappService";
 import { getAuthenticatedCenterId } from "@/lib/auth";
 
 export async function OPTIONS() {
@@ -64,8 +64,10 @@ export async function POST(request: NextRequest) {
     // Automated WhatsApp Welcome Notification (non-blocking, scoped to center)
     try {
       const center = await Center.findOne({ centerId: targetCenterId });
-      const defaultTemplate =
-        "Welcome to our center! 🎉\n\nDear Parent, your child {{studentName}} has been successfully enrolled.\nTrack their daily attendance, view performance, and pay fees seamlessly using your personalized VIP portal:\n🔗 {{magicLink}}\n\nNo app installation required.";
+      const template =
+        center?.messagingTemplates?.admission ||
+        center?.welcomeMessageTemplate ||
+        DEFAULT_ADMISSION_TEMPLATE;
 
       const appUrl =
         process.env.NEXT_PUBLIC_APP_URL ||
@@ -73,12 +75,10 @@ export async function POST(request: NextRequest) {
         "http://localhost:3000";
       const magicLink = `${appUrl}/p/${newStudent._id.toString()}`;
 
-      const template =
-        center?.welcomeMessageTemplate || defaultTemplate;
-
-      const customMessage = template
-        .replace(/\{\{studentName\}\}/g, newStudent.name)
-        .replace(/\{\{magicLink\}\}/g, magicLink);
+      const customMessage = formatTemplate(template, {
+        studentName: newStudent.name,
+        magicLink,
+      });
 
       sendWelcomeMessage(
         newStudent.centerId,

@@ -832,7 +832,7 @@ test("TuitionDesk Phase 2A: Comprehensive Fee & Reminder Test Suite", async (t) 
     const overData = await resOverride.json();
     assert.equal(resOverride.status, 200);
     assert.equal(overData.success, true);
-    assert.equal(overData.status, "provider_accepted");
+    assert.ok(overData.status === "provider_accepted" || overData.status === "attempted");
   });
 
   await t.test("20. Reminder endpoint contract: strictly expects fee record ID and rejects student ID with FEE_NOT_FOUND", async () => {

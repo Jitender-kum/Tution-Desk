@@ -112,7 +112,7 @@ export async function PUT(request: NextRequest) {
     );
   }
 
-  const { welcomeMessageTemplate, upiId } = body;
+  const { welcomeMessageTemplate, messagingTemplates, upiId } = body;
 
   try {
     const forwardHeaders: Record<string, string> = {
@@ -127,6 +127,9 @@ export async function PUT(request: NextRequest) {
     const payload: Record<string, unknown> = {
       centerId,
     };
+    if (messagingTemplates && typeof messagingTemplates === "object") {
+      payload.messagingTemplates = messagingTemplates;
+    }
     if (typeof welcomeMessageTemplate === "string") {
       payload.welcomeMessageTemplate = welcomeMessageTemplate;
     }

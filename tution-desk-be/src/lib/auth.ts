@@ -1,6 +1,6 @@
 import { SignJWT, jwtVerify, type JWTPayload } from "jose";
-import { NextRequest } from "next/server";
-import { getJwtSecretKey } from "./jwt";
+import type { NextRequest } from "next/server";
+import { getJwtSecretKey } from "./jwt.ts";
 
 export interface AuthPayload extends JWTPayload {
   userId?: string;

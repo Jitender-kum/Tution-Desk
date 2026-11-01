@@ -5,6 +5,7 @@ import Fee from "@/models/Fee";
 import "@/models/Student"; // Register Student model for population
 import { getAuthenticatedCenterId } from "@/lib/auth";
 import { getCorsHeaders, handleCorsPreflight } from "@/lib/cors";
+import { sendPaymentReceipt } from "@/lib/whatsappService";
 
 export async function OPTIONS(request: NextRequest) {
   return handleCorsPreflight(request, "PUT, GET, DELETE, OPTIONS");
@@ -104,6 +105,20 @@ export async function PUT(
 
     await existingFee.save();
     await existingFee.populate("studentId");
+
+    if (existingFee.status === "Paid" && existingFee.studentId && (existingFee.studentId as any).parentWhatsApp) {
+      const studentDoc = existingFee.studentId as any;
+      sendPaymentReceipt(
+        existingFee.centerId || targetCenterId || "",
+        studentDoc.parentWhatsApp,
+        studentDoc.name || "Student",
+        existingFee.paidAmount || existingFee.amountDue,
+        receiptNumber,
+        studentDoc._id?.toString()
+      ).catch((dispatchErr) => {
+        console.warn("[FEES UPDATE] WhatsApp receipt dispatch warning:", dispatchErr.message);
+      });
+    }
 
     return NextResponse.json(
       {

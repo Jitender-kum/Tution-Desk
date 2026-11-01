@@ -4,8 +4,12 @@ import Center from "@/models/Center";
 import { getAuthenticatedCenterId } from "@/lib/auth";
 import { getCorsHeaders, handleCorsPreflight } from "@/lib/cors";
 
-const DEFAULT_WELCOME_TEMPLATE =
-  "Welcome to our center! 🎉\n\nDear Parent, your child {{studentName}} has been successfully enrolled.\nTrack their daily attendance, view performance, and pay fees seamlessly using your personalized VIP portal:\n🔗 {{magicLink}}\n\nNo app installation required.";
+import {
+  DEFAULT_ADMISSION_TEMPLATE,
+  DEFAULT_FEE_REMINDER_TEMPLATE,
+  DEFAULT_PAYMENT_RECEIPT_TEMPLATE,
+  IMessagingTemplates,
+} from "@/models/Center";
 
 export async function OPTIONS(request: NextRequest) {
   return handleCorsPreflight(request, "GET, PUT, OPTIONS");
@@ -39,14 +43,29 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    const admissionTemplate =
+      center.messagingTemplates?.admission ||
+      center.welcomeMessageTemplate ||
+      DEFAULT_ADMISSION_TEMPLATE;
+    const feeReminderTemplate =
+      center.messagingTemplates?.feeReminder ||
+      DEFAULT_FEE_REMINDER_TEMPLATE;
+    const paymentReceiptTemplate =
+      center.messagingTemplates?.paymentReceipt ||
+      DEFAULT_PAYMENT_RECEIPT_TEMPLATE;
+
     return NextResponse.json(
       {
         success: true,
         data: {
           centerId: center.centerId,
           name: center.name,
-          welcomeMessageTemplate:
-            center.welcomeMessageTemplate || DEFAULT_WELCOME_TEMPLATE,
+          welcomeMessageTemplate: admissionTemplate,
+          messagingTemplates: {
+            admission: admissionTemplate,
+            feeReminder: feeReminderTemplate,
+            paymentReceipt: paymentReceiptTemplate,
+          },
           upiId: center.upiId || "",
         },
       },
@@ -70,7 +89,7 @@ export async function PUT(request: NextRequest) {
 
     const authCenterId = await getAuthenticatedCenterId(request);
     const body = await request.json().catch(() => ({}));
-    const { centerId, welcomeMessageTemplate, upiId } = body;
+    const { centerId, welcomeMessageTemplate, messagingTemplates, upiId } = body;
     const headerCenterId = request.headers.get("x-center-id");
 
     let targetCenterId = authCenterId;
@@ -94,10 +113,30 @@ export async function PUT(request: NextRequest) {
 
     const updateFields: Record<string, unknown> = {};
 
-    if (typeof welcomeMessageTemplate === "string") {
-      updateFields.welcomeMessageTemplate = welcomeMessageTemplate.trim();
+    // 1. Process messagingTemplates nested object
+    if (messagingTemplates && typeof messagingTemplates === "object") {
+      const templates = messagingTemplates as IMessagingTemplates;
+      if (typeof templates.admission === "string") {
+        updateFields["messagingTemplates.admission"] = templates.admission.trim();
+        // Keep legacy welcomeMessageTemplate in sync for backward compatibility
+        updateFields.welcomeMessageTemplate = templates.admission.trim();
+      }
+      if (typeof templates.feeReminder === "string") {
+        updateFields["messagingTemplates.feeReminder"] = templates.feeReminder.trim();
+      }
+      if (typeof templates.paymentReceipt === "string") {
+        updateFields["messagingTemplates.paymentReceipt"] = templates.paymentReceipt.trim();
+      }
     }
 
+    // 2. Process legacy welcomeMessageTemplate if provided independently
+    if (typeof welcomeMessageTemplate === "string" && !updateFields["messagingTemplates.admission"]) {
+      const trimmedWelcome = welcomeMessageTemplate.trim();
+      updateFields.welcomeMessageTemplate = trimmedWelcome;
+      updateFields["messagingTemplates.admission"] = trimmedWelcome;
+    }
+
+    // 3. Process UPI ID
     if (typeof upiId === "string") {
       updateFields.upiId = upiId.trim();
     }
@@ -106,7 +145,7 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json(
         {
           success: false,
-          error: "At least one setting (welcomeMessageTemplate or upiId) is required",
+          error: "At least one setting (messagingTemplates, welcomeMessageTemplate, or upiId) is required",
         },
         { status: 400, headers: corsHeaders }
       );
@@ -125,6 +164,17 @@ export async function PUT(request: NextRequest) {
       );
     }
 
+    const resolvedAdmission =
+      updatedCenter.messagingTemplates?.admission ||
+      updatedCenter.welcomeMessageTemplate ||
+      DEFAULT_ADMISSION_TEMPLATE;
+    const resolvedFeeReminder =
+      updatedCenter.messagingTemplates?.feeReminder ||
+      DEFAULT_FEE_REMINDER_TEMPLATE;
+    const resolvedPaymentReceipt =
+      updatedCenter.messagingTemplates?.paymentReceipt ||
+      DEFAULT_PAYMENT_RECEIPT_TEMPLATE;
+
     return NextResponse.json(
       {
         success: true,
@@ -132,7 +182,12 @@ export async function PUT(request: NextRequest) {
         data: {
           centerId: updatedCenter.centerId,
           name: updatedCenter.name,
-          welcomeMessageTemplate: updatedCenter.welcomeMessageTemplate,
+          welcomeMessageTemplate: resolvedAdmission,
+          messagingTemplates: {
+            admission: resolvedAdmission,
+            feeReminder: resolvedFeeReminder,
+            paymentReceipt: resolvedPaymentReceipt,
+          },
           upiId: updatedCenter.upiId || "",
         },
       },

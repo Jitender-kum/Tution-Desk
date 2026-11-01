@@ -4,6 +4,7 @@ import mongoose from "mongoose";
 import connectDB from "@/lib/db";
 import Fee from "@/models/Fee";
 import "@/models/Student"; // Register student model
+import { sendPaymentReceipt } from "@/lib/whatsappService";
 
 export async function OPTIONS() {
   return new NextResponse(null, {
@@ -442,6 +443,25 @@ export async function POST(request: NextRequest) {
 
     // 6. Return Structured Success Response
     if (isFullSettlement) {
+      Fee.findById(updatedFee._id)
+        .populate("studentId")
+        .then((populated) => {
+          if (populated?.studentId && (populated.studentId as any).parentWhatsApp) {
+            const s = populated.studentId as any;
+            sendPaymentReceipt(
+              populated.centerId,
+              s.parentWhatsApp,
+              s.name || "Student",
+              receivedAmount,
+              updatedFee?.receiptNumber || "",
+              s._id?.toString()
+            ).catch((err) => {
+              console.warn("[YOUPI WEBHOOK] WhatsApp receipt dispatch warning:", err.message);
+            });
+          }
+        })
+        .catch(() => {});
+
       return NextResponse.json(
         {
           success: true,

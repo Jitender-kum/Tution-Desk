@@ -6,6 +6,12 @@
  * Implements a strict fail-closed simulation guard.
  */
 
+import Center, {
+  DEFAULT_ADMISSION_TEMPLATE,
+  DEFAULT_FEE_REMINDER_TEMPLATE,
+  DEFAULT_PAYMENT_RECEIPT_TEMPLATE,
+} from "../models/Center.ts";
+
 function getWhatsappServiceUrl(): string {
   const raw = process.env.WHATSAPP_SERVICE_URL || "http://localhost:3005";
   return raw.trim().replace(/\/+$/, "");
@@ -294,6 +300,21 @@ export interface SendFeeReminderResult {
 }
 
 /**
+ * Helper to dynamically replace placeholders in templates (e.g. {{studentName}}, {{amountDue}}).
+ */
+export function formatTemplate(
+  template: string,
+  variables: Record<string, string | number | undefined | null>
+): string {
+  let result = template;
+  for (const [key, value] of Object.entries(variables)) {
+    const regex = new RegExp(`\\{\\{${key}\\}\\}`, "g");
+    result = result.replace(regex, value !== undefined && value !== null ? String(value) : "");
+  }
+  return result;
+}
+
+/**
  * Sends an automated fee reminder to the parent's WhatsApp with due date, amount, and payment portal link.
  */
 export async function sendFeeReminder(
@@ -302,15 +323,39 @@ export async function sendFeeReminder(
   studentName: string,
   amount: number | string,
   dueDate: string,
-  magicLink?: string
+  magicLink?: string,
+  customTemplate?: string
 ): Promise<SendFeeReminderResult> {
-  const portalText = magicLink
-    ? `\n\n💳 Pay or view fee receipt online directly via your VIP Parent Portal:\n🔗 ${magicLink}`
-    : "";
+  let message: string;
+  if (customTemplate) {
+    message = formatTemplate(customTemplate, {
+      studentName,
+      amountDue: Number(amount).toLocaleString("en-IN"),
+      dueDate,
+      magicLink: magicLink || "",
+    });
+  } else {
+    let template = DEFAULT_FEE_REMINDER_TEMPLATE;
+    try {
+      const center = await Center.findOne({ centerId }).select("messagingTemplates").lean();
+      if (center?.messagingTemplates?.feeReminder) {
+        template = center.messagingTemplates.feeReminder;
+      }
+    } catch {}
 
-  const message = `Payment Reminder 🔔\n\nDear Parent, this is a friendly reminder that the tuition fee of ₹${Number(
-    amount
-  ).toLocaleString("en-IN")} for ${studentName} is due on ${dueDate}.${portalText}\n\nIf you have already paid, please ignore this reminder. Thank you!`;
+    if (template === DEFAULT_FEE_REMINDER_TEMPLATE && !magicLink) {
+      message = `Payment Reminder 🔔\n\nDear Parent, this is a friendly reminder that the tuition fee of ₹${Number(
+        amount
+      ).toLocaleString("en-IN")} for ${studentName} is due on ${dueDate}.\n\nIf you have already paid, please ignore this reminder. Thank you!`;
+    } else {
+      message = formatTemplate(template, {
+        studentName,
+        amountDue: Number(amount).toLocaleString("en-IN"),
+        dueDate,
+        magicLink: magicLink || "",
+      });
+    }
+  }
 
   const cleanDigits = sanitizePhoneNumber(phone);
   const maskedPhone = maskPhoneNumber(cleanDigits);
@@ -400,6 +445,157 @@ export async function sendFeeReminder(
       delivered: false,
       centerId,
       phone: maskedPhone,
+      message,
+      error: errorMsg,
+    };
+  }
+}
+
+export interface SendPaymentReceiptResult {
+  success: boolean;
+  centerId: string;
+  phone: string;
+  receiptNumber: string;
+  message: string;
+  messageId?: string;
+  simulated?: boolean;
+  accepted?: boolean;
+  delivered?: boolean;
+  error?: string;
+}
+
+/**
+ * Sends an automated payment receipt confirmation to the parent's WhatsApp upon recording a fee payment.
+ */
+export async function sendPaymentReceipt(
+  centerId: string,
+  phone: string,
+  studentName: string,
+  paidAmount: number | string,
+  receiptNumber: string,
+  studentId?: string,
+  customTemplate?: string
+): Promise<SendPaymentReceiptResult> {
+  const appUrl =
+    process.env.NEXT_PUBLIC_APP_URL ||
+    process.env.APP_URL ||
+    "http://localhost:3000";
+  const magicLink = studentId ? `${appUrl}/p/${studentId}` : "";
+
+  let template = customTemplate;
+  if (!template) {
+    try {
+      const center = await Center.findOne({ centerId }).select("messagingTemplates").lean();
+      if (center?.messagingTemplates?.paymentReceipt) {
+        template = center.messagingTemplates.paymentReceipt;
+      }
+    } catch {}
+  }
+  if (!template) {
+    template = DEFAULT_PAYMENT_RECEIPT_TEMPLATE;
+  }
+
+  const formattedPaid = Number(paidAmount).toLocaleString("en-IN");
+  const message = formatTemplate(template, {
+    studentName,
+    paidAmount: formattedPaid,
+    receiptNumber,
+    magicLink,
+  });
+
+  const cleanDigits = sanitizePhoneNumber(phone);
+  const maskedPhone = maskPhoneNumber(cleanDigits);
+
+  if (cleanDigits.length < 10 || cleanDigits.length > 15) {
+    return {
+      success: false,
+      simulated: false,
+      accepted: false,
+      delivered: false,
+      centerId,
+      phone: maskedPhone,
+      receiptNumber,
+      message,
+      error: "Invalid recipient phone number: must contain 10 to 15 digits",
+    };
+  }
+
+  // Fail-closed simulation guard: zero network requests unless explicitly opted into live mode
+  if (!isLiveDispatchEnabled()) {
+    logSimulatedDispatch("payment_receipt", centerId, cleanDigits, message);
+    return {
+      success: false,
+      simulated: true,
+      accepted: false,
+      delivered: false,
+      centerId,
+      phone: maskedPhone,
+      receiptNumber,
+      message,
+      messageId: `sim_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      error:
+        "Simulation mode active: outbound live WhatsApp dispatch disabled. Set WHATSAPP_MODE=live and ENABLE_LIVE_WHATSAPP=true to enable live delivery.",
+    };
+  }
+
+  const serviceUrl = getWhatsappServiceUrl();
+  try {
+    const response = await fetch(`${serviceUrl}/send-message`, {
+      method: "POST",
+      headers: getInternalHeaders(),
+      body: JSON.stringify({ centerId, phone: cleanDigits, message }),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    const data = await response.json().catch(() => null);
+
+    if (response.ok && data?.success) {
+      console.log(
+        `[WHATSAPP SERVICE] [Center: ${centerId}] Payment receipt dispatched! Recipient: ${maskedPhone} | ID: ${data.messageId}`
+      );
+      return {
+        success: true,
+        simulated: false,
+        accepted: true,
+        delivered: false,
+        centerId,
+        phone: maskedPhone,
+        receiptNumber,
+        message,
+        messageId: data.messageId,
+      };
+    } else {
+      const errorMsg =
+        data?.error || `Microservice returned HTTP ${response.status}`;
+      console.warn(
+        `[WHATSAPP SERVICE] [Center: ${centerId}] Payment receipt failed (${response.status}): ${errorMsg}`
+      );
+      return {
+        success: false,
+        simulated: false,
+        accepted: false,
+        delivered: false,
+        centerId,
+        phone: maskedPhone,
+        receiptNumber,
+        message,
+        error: errorMsg,
+      };
+    }
+  } catch (err: unknown) {
+    const errorMsg =
+      err instanceof Error ? err.message : "WhatsApp microservice unreachable";
+    console.warn(
+      `[WHATSAPP SERVICE ERROR] Microservice at ${serviceUrl} unreachable for payment receipt: ${errorMsg}`
+    );
+    return {
+      success: false,
+      simulated: false,
+      accepted: false,
+      delivered: false,
+      centerId,
+      phone: maskedPhone,
+      receiptNumber,
       message,
       error: errorMsg,
     };

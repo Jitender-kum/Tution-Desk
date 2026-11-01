@@ -26,6 +26,9 @@ import {
   Save,
   CreditCard,
   IndianRupee,
+  Bell,
+  Receipt,
+  GraduationCap,
   X,
 } from "lucide-react";
 import { getCurrentCenterId } from "@/lib/apiClient";
@@ -142,9 +145,26 @@ export default function SettingsPage() {
     message: string;
   } | null>(null);
 
-  // Messaging Templates state (Task 3)
+  // Multi-tab Messaging Templates state
+  const DEFAULT_TEMPLATES = {
+    admission:
+      "Welcome to our center! 🎉\n\nDear Parent, your child {{studentName}} has been successfully enrolled.\nTrack their daily attendance, view performance, and pay fees seamlessly using your personalized VIP portal:\n🔗 {{magicLink}}\n\nNo app installation required.",
+    feeReminder:
+      "Payment Reminder 🔔\n\nDear Parent, this is a friendly reminder that the tuition fee of ₹{{amountDue}} for {{studentName}} is due on {{dueDate}}.\n\n💳 Pay or view fee receipt online directly via your VIP Parent Portal:\n🔗 {{magicLink}}\n\nIf you have already paid, please ignore this reminder. Thank you!",
+    paymentReceipt:
+      "Payment Received Successfully ✅\n\nDear Parent, we have received a payment of ₹{{paidAmount}} for {{studentName}}.\nOfficial Receipt Number: {{receiptNumber}}\n\n📄 View and download your updated fee ledger & receipt here:\n🔗 {{magicLink}}\n\nThank you for your timely payment!",
+  };
+
+  type TemplateTab = "admission" | "feeReminder" | "paymentReceipt";
+
+  const [activeTemplateTab, setActiveTemplateTab] = useState<TemplateTab>("admission");
+  const [messagingTemplates, setMessagingTemplates] = useState<{
+    admission: string;
+    feeReminder: string;
+    paymentReceipt: string;
+  }>(DEFAULT_TEMPLATES);
   const [welcomeMessageTemplate, setWelcomeMessageTemplate] = useState<string>(
-    "Welcome to our center! 🎉\n\nDear Parent, your child {{studentName}} has been successfully enrolled.\nTrack their daily attendance, view performance, and pay fees seamlessly using your personalized VIP portal:\n🔗 {{magicLink}}\n\nNo app installation required."
+    DEFAULT_TEMPLATES.admission
   );
   const [templateSaving, setTemplateSaving] = useState(false);
   const [templateSaveStatus, setTemplateSaveStatus] = useState<{
@@ -179,14 +199,26 @@ export default function SettingsPage() {
       .catch(() => {});
   }, []);
 
-  // Fetch center settings (welcomeMessageTemplate & upiId) when centerId is resolved
+  // Fetch center settings (messagingTemplates & upiId) when centerId is resolved
   useEffect(() => {
     if (!centerId) return;
 
     fetch("/api/centers/settings")
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
-        if (data?.data?.welcomeMessageTemplate) {
+        if (data?.data?.messagingTemplates) {
+          const loaded = data.data.messagingTemplates;
+          setMessagingTemplates({
+            admission: loaded.admission || data.data.welcomeMessageTemplate || DEFAULT_TEMPLATES.admission,
+            feeReminder: loaded.feeReminder || DEFAULT_TEMPLATES.feeReminder,
+            paymentReceipt: loaded.paymentReceipt || DEFAULT_TEMPLATES.paymentReceipt,
+          });
+          setWelcomeMessageTemplate(loaded.admission || data.data.welcomeMessageTemplate || DEFAULT_TEMPLATES.admission);
+        } else if (data?.data?.welcomeMessageTemplate) {
+          setMessagingTemplates((prev) => ({
+            ...prev,
+            admission: data.data.welcomeMessageTemplate,
+          }));
           setWelcomeMessageTemplate(data.data.welcomeMessageTemplate);
         }
         if (data?.data?.upiId !== undefined) {
@@ -196,7 +228,7 @@ export default function SettingsPage() {
         }
       })
       .catch((err) => {
-        console.warn("Could not fetch welcome template or upiId:", err);
+        console.warn("Could not fetch messaging templates or upiId:", err);
       });
   }, [centerId]);
 
@@ -212,7 +244,8 @@ export default function SettingsPage() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          welcomeMessageTemplate,
+          messagingTemplates,
+          welcomeMessageTemplate: messagingTemplates.admission,
         }),
       });
 
@@ -222,15 +255,15 @@ export default function SettingsPage() {
         setTemplateSaveStatus({
           type: "success",
           message:
-            "Messaging template saved successfully! New admissions will receive this customized message.",
+            "All messaging templates saved successfully! Automated WhatsApp notifications will use these custom templates.",
         });
       } else {
-        throw new Error(data?.error || "Failed to save template.");
+        throw new Error(data?.error || "Failed to save templates.");
       }
     } catch (err: unknown) {
       setTemplateSaveStatus({
         type: "error",
-        message: err instanceof Error ? err.message : "Failed to save template.",
+        message: err instanceof Error ? err.message : "Failed to save templates.",
       });
     } finally {
       setTemplateSaving(false);
@@ -275,10 +308,19 @@ export default function SettingsPage() {
   };
 
   const handleInsertPlaceholder = (placeholder: string) => {
-    setWelcomeMessageTemplate((prev) => {
-      if (prev.includes(placeholder)) return prev;
-      return `${prev} ${placeholder}`;
+    setMessagingTemplates((prev) => {
+      const current = prev[activeTemplateTab] || "";
+      if (current.includes(placeholder)) return prev;
+      return {
+        ...prev,
+        [activeTemplateTab]: `${current} ${placeholder}`,
+      };
     });
+    if (activeTemplateTab === "admission") {
+      setWelcomeMessageTemplate((prev) =>
+        prev.includes(placeholder) ? prev : `${prev} ${placeholder}`
+      );
+    }
   };
 
   // 2. Poll center-specific status: http://localhost:3005/status/:centerId
@@ -1348,8 +1390,8 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* 4. MESSAGING TEMPLATES SECTION (Task 3) */}
-      <div className="glass-card p-6 sm:p-7 rounded-3xl border border-slate-200/90 shadow-sm space-y-5 bg-white">
+      {/* 4. MESSAGING TEMPLATES SECTION (Task 3: Multi-Tab Template System) */}
+      <div className="glass-card p-6 sm:p-7 rounded-3xl border border-slate-200/90 shadow-sm space-y-6 bg-white">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center shadow-xs">
@@ -1364,75 +1406,247 @@ export default function SettingsPage() {
               </p>
             </div>
           </div>
-          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-100">
-            Admission Welcome
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-100">
+            {activeTemplateTab === "admission" && "🎓 Admission Welcome"}
+            {activeTemplateTab === "feeReminder" && "🔔 Fee Reminder"}
+            {activeTemplateTab === "paymentReceipt" && "🧾 Payment Receipt"}
           </span>
         </div>
 
-        <form onSubmit={handleSaveTemplate} className="space-y-4">
+        {/* Tab Navigation Controls */}
+        <div className="flex items-center gap-1.5 p-1.5 rounded-2xl bg-slate-100/90 border border-slate-200/80 overflow-x-auto">
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTemplateTab("admission");
+              if (templateSaveStatus) setTemplateSaveStatus(null);
+            }}
+            className={`tap-bounce flex-1 min-w-[120px] py-2.5 px-4 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+              activeTemplateTab === "admission"
+                ? "bg-white text-blue-700 shadow-xs border border-slate-200/80"
+                : "text-slate-600 hover:text-slate-900 hover:bg-white/50"
+            }`}
+          >
+            <GraduationCap className="w-4 h-4" />
+            <span>Admission</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTemplateTab("feeReminder");
+              if (templateSaveStatus) setTemplateSaveStatus(null);
+            }}
+            className={`tap-bounce flex-1 min-w-[120px] py-2.5 px-4 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+              activeTemplateTab === "feeReminder"
+                ? "bg-white text-blue-700 shadow-xs border border-slate-200/80"
+                : "text-slate-600 hover:text-slate-900 hover:bg-white/50"
+            }`}
+          >
+            <Bell className="w-4 h-4" />
+            <span>Fee Reminder</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTemplateTab("paymentReceipt");
+              if (templateSaveStatus) setTemplateSaveStatus(null);
+            }}
+            className={`tap-bounce flex-1 min-w-[120px] py-2.5 px-4 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+              activeTemplateTab === "paymentReceipt"
+                ? "bg-white text-blue-700 shadow-xs border border-slate-200/80"
+                : "text-slate-600 hover:text-slate-900 hover:bg-white/50"
+            }`}
+          >
+            <Receipt className="w-4 h-4" />
+            <span>Payment Receipt</span>
+          </button>
+        </div>
+
+        <form onSubmit={handleSaveTemplate} className="space-y-5">
+          {/* Active Tab Configuration */}
           <div>
-            <div className="flex items-center justify-between mb-1.5 flex-wrap gap-2">
-              <label
-                htmlFor="welcome-template"
-                className="text-xs font-bold text-slate-700 uppercase tracking-wider block"
-              >
-                Student Admission Welcome Template
-              </label>
-              <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
-                <span>Click to insert:</span>
-                <button
-                  type="button"
-                  onClick={() => handleInsertPlaceholder("{{studentName}}")}
-                  className="px-2 py-0.5 rounded-md bg-slate-100 hover:bg-slate-200 text-blue-600 font-mono font-bold text-[10px] transition-colors"
-                  title="Insert student name placeholder"
+            <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+              <div>
+                <label
+                  htmlFor="template-editor"
+                  className="text-xs font-bold text-slate-800 uppercase tracking-wider block"
                 >
-                  {"{{studentName}}"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleInsertPlaceholder("{{magicLink}}")}
-                  className="px-2 py-0.5 rounded-md bg-slate-100 hover:bg-slate-200 text-blue-600 font-mono font-bold text-[10px] transition-colors"
-                  title="Insert VIP Parent portal link placeholder"
-                >
-                  {"{{magicLink}}"}
-                </button>
+                  {activeTemplateTab === "admission" && "Student Admission Welcome Template"}
+                  {activeTemplateTab === "feeReminder" && "Fee Due Reminder Template"}
+                  {activeTemplateTab === "paymentReceipt" && "Payment Receipt Confirmation Template"}
+                </label>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  {activeTemplateTab === "admission" && "Dispatched automatically to parents when a new student is enrolled."}
+                  {activeTemplateTab === "feeReminder" && "Dispatched for pending fees with due date, amount, and payment portal link."}
+                  {activeTemplateTab === "paymentReceipt" && "Dispatched immediately upon recording or confirming a fee payment."}
+                </p>
+              </div>
+
+              {/* Placeholder Pills (Click to Insert) */}
+              <div className="flex items-center gap-1.5 text-[11px] text-slate-500 flex-wrap">
+                <span className="font-medium text-slate-400">Click to insert:</span>
+                {activeTemplateTab === "admission" && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => handleInsertPlaceholder("{{studentName}}")}
+                      className="px-2 py-0.5 rounded-md bg-slate-100 hover:bg-blue-50 text-blue-600 font-mono font-bold text-[10px] border border-slate-200/60 transition-colors cursor-pointer"
+                      title="Insert student name"
+                    >
+                      {"{{studentName}}"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleInsertPlaceholder("{{magicLink}}")}
+                      className="px-2 py-0.5 rounded-md bg-slate-100 hover:bg-blue-50 text-blue-600 font-mono font-bold text-[10px] border border-slate-200/60 transition-colors cursor-pointer"
+                      title="Insert VIP Parent Portal magic link"
+                    >
+                      {"{{magicLink}}"}
+                    </button>
+                  </>
+                )}
+
+                {activeTemplateTab === "feeReminder" && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => handleInsertPlaceholder("{{studentName}}")}
+                      className="px-2 py-0.5 rounded-md bg-slate-100 hover:bg-blue-50 text-blue-600 font-mono font-bold text-[10px] border border-slate-200/60 transition-colors cursor-pointer"
+                      title="Insert student name"
+                    >
+                      {"{{studentName}}"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleInsertPlaceholder("{{amountDue}}")}
+                      className="px-2 py-0.5 rounded-md bg-slate-100 hover:bg-blue-50 text-blue-600 font-mono font-bold text-[10px] border border-slate-200/60 transition-colors cursor-pointer"
+                      title="Insert pending amount due"
+                    >
+                      {"{{amountDue}}"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleInsertPlaceholder("{{dueDate}}")}
+                      className="px-2 py-0.5 rounded-md bg-slate-100 hover:bg-blue-50 text-blue-600 font-mono font-bold text-[10px] border border-slate-200/60 transition-colors cursor-pointer"
+                      title="Insert fee due date"
+                    >
+                      {"{{dueDate}}"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleInsertPlaceholder("{{magicLink}}")}
+                      className="px-2 py-0.5 rounded-md bg-slate-100 hover:bg-blue-50 text-blue-600 font-mono font-bold text-[10px] border border-slate-200/60 transition-colors cursor-pointer"
+                      title="Insert VIP Parent Portal link"
+                    >
+                      {"{{magicLink}}"}
+                    </button>
+                  </>
+                )}
+
+                {activeTemplateTab === "paymentReceipt" && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => handleInsertPlaceholder("{{studentName}}")}
+                      className="px-2 py-0.5 rounded-md bg-slate-100 hover:bg-blue-50 text-blue-600 font-mono font-bold text-[10px] border border-slate-200/60 transition-colors cursor-pointer"
+                      title="Insert student name"
+                    >
+                      {"{{studentName}}"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleInsertPlaceholder("{{paidAmount}}")}
+                      className="px-2 py-0.5 rounded-md bg-slate-100 hover:bg-blue-50 text-blue-600 font-mono font-bold text-[10px] border border-slate-200/60 transition-colors cursor-pointer"
+                      title="Insert paid amount"
+                    >
+                      {"{{paidAmount}}"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleInsertPlaceholder("{{receiptNumber}}")}
+                      className="px-2 py-0.5 rounded-md bg-slate-100 hover:bg-blue-50 text-blue-600 font-mono font-bold text-[10px] border border-slate-200/60 transition-colors cursor-pointer"
+                      title="Insert official receipt number"
+                    >
+                      {"{{receiptNumber}}"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleInsertPlaceholder("{{magicLink}}")}
+                      className="px-2 py-0.5 rounded-md bg-slate-100 hover:bg-blue-50 text-blue-600 font-mono font-bold text-[10px] border border-slate-200/60 transition-colors cursor-pointer"
+                      title="Insert VIP Parent Portal link"
+                    >
+                      {"{{magicLink}}"}
+                    </button>
+                  </>
+                )}
               </div>
             </div>
 
             <textarea
-              id="welcome-template"
-              rows={6}
-              value={welcomeMessageTemplate}
+              id="template-editor"
+              rows={7}
+              value={messagingTemplates[activeTemplateTab] || ""}
               onChange={(e) => {
-                setWelcomeMessageTemplate(e.target.value);
+                const val = e.target.value;
+                setMessagingTemplates((prev) => ({
+                  ...prev,
+                  [activeTemplateTab]: val,
+                }));
+                if (activeTemplateTab === "admission") {
+                  setWelcomeMessageTemplate(val);
+                }
                 if (templateSaveStatus) setTemplateSaveStatus(null);
               }}
-              placeholder="Enter custom welcome message template..."
-              className="w-full p-3.5 text-xs sm:text-sm rounded-2xl border border-slate-200 bg-slate-50/50 focus:bg-white focus:outline-hidden focus:ring-4 focus:ring-blue-100 focus:border-blue-600 font-mono transition-all text-slate-900 leading-relaxed resize-y"
+              placeholder={`Enter custom ${activeTemplateTab} message template...`}
+              className="w-full p-4 text-xs sm:text-sm rounded-2xl border border-slate-200 bg-slate-50/50 focus:bg-white focus:outline-hidden focus:ring-4 focus:ring-blue-100 focus:border-blue-600 font-mono transition-all text-slate-900 leading-relaxed resize-y shadow-2xs"
             />
 
             <p className="text-[11px] text-slate-500 mt-2 flex items-center gap-1.5 leading-relaxed">
               <Sparkles className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
               <span>
-                Use <code>{"{{studentName}}"}</code> and <code>{"{{magicLink}}"}</code> as placeholders. The system will auto-replace them.
+                Tags inside <code>{"{{...}}"}</code> are replaced dynamically during WhatsApp dispatch.
               </span>
             </p>
           </div>
 
-          {/* Live Preview Box */}
-          <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-1.5">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-              Live Preview (Parent View)
-            </span>
-            <div className="p-3.5 rounded-xl bg-white border border-slate-200 text-xs text-slate-700 whitespace-pre-wrap font-sans shadow-2xs leading-relaxed">
-              {welcomeMessageTemplate
-                ? welcomeMessageTemplate
+          {/* Live Preview Box with Real Representative Data */}
+          <div className="p-4 rounded-2xl bg-slate-50/90 border border-slate-200/80 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                Live WhatsApp Preview (Parent View)
+              </span>
+              <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-100">
+                Live Dynamic Render
+              </span>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-white border border-slate-200/90 text-xs text-slate-800 whitespace-pre-wrap font-sans shadow-2xs leading-relaxed max-w-2xl">
+              {(() => {
+                const rawTemplate = messagingTemplates[activeTemplateTab] || "";
+                if (!rawTemplate.trim()) {
+                  return <span className="text-slate-400 italic">No template text provided.</span>;
+                }
+
+                if (activeTemplateTab === "admission") {
+                  return rawTemplate
                     .replace(/\{\{studentName\}\}/g, "Aarav Sharma")
-                    .replace(
-                      /\{\{magicLink\}\}/g,
-                      "http://localhost:3000/p/sample-id"
-                    )
-                : "No template provided."}
+                    .replace(/\{\{magicLink\}\}/g, "https://tuitiondesk.com/p/sample-id");
+                } else if (activeTemplateTab === "feeReminder") {
+                  return rawTemplate
+                    .replace(/\{\{studentName\}\}/g, "Aarav Sharma")
+                    .replace(/\{\{amountDue\}\}/g, "3,500")
+                    .replace(/\{\{dueDate\}\}/g, "10 Nov 2026")
+                    .replace(/\{\{magicLink\}\}/g, "https://tuitiondesk.com/p/sample-id");
+                } else {
+                  return rawTemplate
+                    .replace(/\{\{studentName\}\}/g, "Aarav Sharma")
+                    .replace(/\{\{paidAmount\}\}/g, "3,500")
+                    .replace(/\{\{receiptNumber\}\}/g, "RCP-2026-9481")
+                    .replace(/\{\{magicLink\}\}/g, "https://tuitiondesk.com/p/sample-id");
+                }
+              })()}
             </div>
           </div>
 
@@ -1458,18 +1672,18 @@ export default function SettingsPage() {
           <div className="mt-5 pt-3 border-t border-slate-100 flex items-center justify-end w-full">
             <button
               type="submit"
-              disabled={templateSaving || !welcomeMessageTemplate.trim()}
+              disabled={templateSaving || !messagingTemplates[activeTemplateTab]?.trim()}
               className="tap-bounce h-11 px-6 w-auto flex-shrink-0 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 active:scale-[0.98] text-white text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-blue-500/25 disabled:opacity-50 disabled:cursor-not-allowed transition-all cursor-pointer"
             >
               {templateSaving ? (
                 <>
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>Saving Template...</span>
+                  <span>Saving All Templates...</span>
                 </>
               ) : (
                 <>
                   <Save className="w-3.5 h-3.5 stroke-[2.2]" />
-                  <span>Save Template</span>
+                  <span>Save Templates</span>
                 </>
               )}
             </button>

@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [0.2.5] - 2026-11-01
+
+### Added — Multi-Tab WhatsApp Messaging Templates Upgrade
+- **Database Schema**:
+  - Migrated single template string in `Center` model to nested subdocument `messagingTemplates` supporting `admission`, `feeReminder`, and `paymentReceipt`.
+  - Maintained 100% backward compatibility for legacy `welcomeMessageTemplate` across getters, setters, and schemas.
+- **Frontend Settings UI**:
+  - Upgraded Settings page into a multi-tab interface with 3 tabs: "Admission", "Fee Reminder", and "Payment Receipt".
+  - Implemented dynamic, contextual click-to-insert placeholder pills (`{{studentName}}`, `{{magicLink}}`, `{{amountDue}}`, `{{dueDate}}`, `{{paidAmount}}`, `{{receiptNumber}}`).
+  - Added dedicated Live WhatsApp Previews with real representative preview data for each template type.
+- **Message Dispatch Services**:
+  - Integrated `center.messagingTemplates.admission` into student enrollment notifications.
+  - Integrated `center.messagingTemplates.feeReminder` into fee reminder dispatching with dynamic placeholder replacement (`formatTemplate`).
+  - Added `sendPaymentReceipt` in `whatsappService.ts` dispatched when offline cash payments are collected or online payments are verified.
+
+---
+
 ## [0.2.4] - 2026-11-01
 
 ### Changed — Permanent Standardization to Baileys Engine

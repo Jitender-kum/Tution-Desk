@@ -6,6 +6,7 @@ import Student from "@/models/Student";
 import { getAuthenticatedCenterId } from "@/lib/auth";
 import { getCorsHeaders, handleCorsPreflight } from "@/lib/cors";
 import { getISTDateComponents } from "@/lib/dateUtils";
+import { sendPaymentReceipt } from "@/lib/whatsappService";
 
 export async function OPTIONS(request: NextRequest) {
   return handleCorsPreflight(request, "POST, OPTIONS");
@@ -129,6 +130,20 @@ export async function POST(request: NextRequest) {
       });
 
       const populatedFee = await Fee.findById(manualNonRecurringFee._id).populate("studentId");
+
+      if (populatedFee?.studentId && (populatedFee.studentId as any).parentWhatsApp) {
+        const studentDoc = populatedFee.studentId as any;
+        sendPaymentReceipt(
+          targetCenterId,
+          studentDoc.parentWhatsApp,
+          studentDoc.name || "Student",
+          parsedAmount,
+          receiptNumber,
+          studentDoc._id?.toString()
+        ).catch((dispatchErr) => {
+          console.warn("[MANUAL COLLECTION] WhatsApp receipt dispatch warning:", dispatchErr.message);
+        });
+      }
 
       return NextResponse.json(
         {
@@ -293,6 +308,20 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      if (isFullPayment && updatedFee?.studentId && (updatedFee.studentId as any).parentWhatsApp) {
+        const studentDoc = updatedFee.studentId as any;
+        sendPaymentReceipt(
+          targetCenterId,
+          studentDoc.parentWhatsApp,
+          studentDoc.name || "Student",
+          parsedAmount,
+          receiptNumber,
+          studentDoc._id?.toString()
+        ).catch((dispatchErr) => {
+          console.warn("[MANUAL COLLECTION] WhatsApp receipt dispatch warning:", dispatchErr.message);
+        });
+      }
+
       return NextResponse.json(
         {
           success: true,
@@ -332,6 +361,20 @@ export async function POST(request: NextRequest) {
     });
 
     const populatedFee = await Fee.findById(newFee._id).populate("studentId");
+
+    if (populatedFee?.studentId && (populatedFee.studentId as any).parentWhatsApp) {
+      const studentDoc = populatedFee.studentId as any;
+      sendPaymentReceipt(
+        targetCenterId,
+        studentDoc.parentWhatsApp,
+        studentDoc.name || "Student",
+        parsedAmount,
+        receiptNumber,
+        studentDoc._id?.toString()
+      ).catch((dispatchErr) => {
+        console.warn("[MANUAL COLLECTION] WhatsApp receipt dispatch warning:", dispatchErr.message);
+      });
+    }
 
     return NextResponse.json(
       {
